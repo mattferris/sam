@@ -38,7 +38,7 @@ page.css
 reset.css
 ```
 
-Options can be set using the `set` command. In fact, `set` actually just sets a variable, but sam uses some reserved variables to customize it's behaviour. Variables can be useful to save yourself some typing.
+Options can be set using the `set` command. Similarily, `def` defines a variable. Variables can be useful to save yourself some typing.
 
 ```
 # assets.pack
@@ -47,7 +47,7 @@ Options can be set using the `set` command. In fact, `set` actually just sets a 
 set suffix .smaller.css
 
 # define path to CSS files
-set path /home/user/css
+def path /home/user/css
 
 # assets
 {path}/form.css
@@ -68,7 +68,7 @@ https://www.example.com/assets/css/remote.css
 If there was more then once asset on the remote host, you could use variables to make our life easier.
 
 ```
-set remote_host https://www.example.com/assets/css
+def remote_host https://www.example.com/assets/css
 
 {remote_host}/remote.css
 {remote_host}/more.css
@@ -99,10 +99,10 @@ Using git to reference assets can be nice because you can pin the included asset
 git git@github.com:user/assets 87dfba2 css/remote.css
 ```
 
-Finally, you can specify a post-processor to complete any final processing of the file. This is useful if you want to minify the assets.
+Finally, you can specify a post-processor to complete any final processing of the file. This is useful if you want to minify the assets. You can define as many post-processors as you want. They will be run in the order they are defined. Each post-processor is run for each asset. A post-processor will only run for assets that come after it.
 
 ```
-set post_processor /path/to/minifier
+post /path/to/minifier
 ```
 
 Taking all the above, the resulting pack file might look like so.
@@ -112,11 +112,11 @@ Taking all the above, the resulting pack file might look like so.
 
 # options
 set suffix .smaller.css
-set post_processor /path/to/minifier
+post /path/to/minifier
 
 # path to local assets
-set path /home/user/assets
-set repo git@github.com:user/assets
+def path /home/user/assets
+def repo git@github.com:user/assets
 
 # remote assets
 git {repo} master

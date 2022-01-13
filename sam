@@ -12,8 +12,25 @@
  * Print usage information, then exit.
  */
 function usage() {
+    global $argv;
     echo <<<EOF
-usage: ${argv[0]} <pack1> [ <packn> ]
+usage: ${argv[0]} [options] <pack1> [ <packn> ]
+
+SAM (Smart Asset Manager) helps assemble your web assets into packages. It
+expects one or more pack files to be specified.
+
+Options:
+
+    --help
+        Display this message.
+
+    --log-level [level]
+        Set the logging threshold. 0 turns logging off, 5+ provides debugging
+        information. Default is 4.
+
+    --quiet
+        Don't display any output.
+
 EOF;
     exit(1);
 }
@@ -22,10 +39,15 @@ EOF;
 /**
  * Print a message.
  *
+ * Levels: 1:error, 2:warn, 3:notice, 4:info, 5+:debug
+ *
+ * @param int $level The log level for the message
  * @param string $tpl The template string
  * @param array $vars Variables to use for substitition
  */
-function _log(string $tpl, array $vars = []) {
+function _log(int $level, string $tpl, array $vars = []) {
+    global $options;
+    if ($level > $options['log-level']) return;
     foreach ($vars as $k => $v) {
         $tpl = str_replace('{'.$k.'}', $v, $tpl);
     }
@@ -40,7 +62,40 @@ function _log(string $tpl, array $vars = []) {
  * @param array $vars Variables to use for substitution
  */
 function error(string $tpl, array $vars = []) {
-    _log("error: $tpl", $vars);
+    _log(1, "error: $tpl", $vars);
+}
+
+
+/**
+ * Print warning message.
+ *
+ * @param string $tpl The template string
+ * @param array $vars Variables to use for substitution
+ */
+function warn(string $tpl, array $vars = []) {
+    _log(2, "warning: $tpl", $vars);
+}
+
+
+/**
+ * Print notice message.
+ *
+ * @param string $tpl The template string
+ * @param array $vars Variables to use for substitution
+ */
+function notice(string $tpl, array $vars = []) {
+    _log(3, "notice: $tpl", $vars);
+}
+
+
+/**
+ * Print info message.
+ *
+ * @param string $tpl The template string
+ * @param array $vars Variables to use for substitution
+ */
+function info(string $tpl, array $vars = []) {
+    _log(4, "info: $tpl", $vars);
 }
 
 
@@ -52,8 +107,9 @@ function error(string $tpl, array $vars = []) {
  * @param array $vars Variables to use for substitution
  */
 function debug(int $level, string $tpl, array $vars = []) {
-    global $options;
-    if ($level <= $options['log_level']) _log("debug: $tpl", $vars);
+    // debug levels start at 1, so we need to add 4 to start at log level 5
+    $level += 4;
+    _log($level, "debug: $tpl", $vars);
 }
 
 
@@ -67,7 +123,7 @@ function pexec(string $cmd, string $path, array $env = []) {
         2 => ['pipe', 'w']
     ];
 
-    debug(1, "running {cmd} in {path}", [ 'cmd' => $cmd, 'path' => $path ]);
+    debug(2, "running {cmd} in {path}", [ 'cmd' => $cmd, 'path' => $path ]);
 
     $proc = proc_open($cmd, $desc, $pipes, $path, $env);
 
@@ -88,13 +144,29 @@ function pexec(string $cmd, string $path, array $env = []) {
 
 
 /**
+ * Define a symbol
+ *
+ * @param string $vardef Symbol definition
+ * @param array $symbols The symbols array
+ */
+function def_symbol(string $vardef, &$symbols) {
+    $sep = strpos($vardef, ' ');
+    $sym = substr($vardef, 0, $sep);
+    $val = substr($vardef, $sep + 1);
+    $symbols[$sym] = $val;
+}
+
+
+/**
  * Set option
  *
  * @param string $optdef Option definition
  * @param array $options The options array
  */
 function set_opt(string $optdef, &$options) {
-    list($opt, $val) = explode(' ', $optdef);
+    $sep = strpos($optdef, ' ');
+    $opt = substr($optdef, 0, $sep);
+    $val = substr($optdef, $sep + 1);
     $options[$opt] = $val;
 }
 
@@ -274,15 +346,96 @@ function fetch_local(string $asset, string $cwd) {
 }
 
 
-$defaults = [
-    'log_level' => 0,
-    'suffix' => '.min.css',
-    'target' => '{pack}{suffix}'
-];
+/**
+ * Run post-processors on a file
+ *
+ * @param string $path The path to the asset file
+ * @param resource $out A file handle to to output file
+ * @param array $processors The post processors to run
+ */
+function post_process(string $path, $out, array $processors) {
+    if (!is_resource($out)) {
+        error('output file handle is not a resource');
+        exit(1);
+    }
 
-$ac = count($argv);
-for ($i=1; $i<$ac; $i++) {
-    $pack = $argv[$i];
+    $buf = file_get_contents($path);
+    $tmp = sys_get_temp_dir();
+
+    debug(1, 'processing {file}', [ 'file' => $path ]);
+    foreach ($processors as $pp) {
+        $stdout = mktemp();
+        $stderr = mktemp();
+
+        debug(2, 'running post-processor: {pp}', [ 'pp' => $pp ]);
+
+        $desc = [
+            0 => ['pipe', 'r'],
+            1 => ['file', $stdout, 'w'],
+            2 => ['file', $stderr, 'w']
+        ];
+
+        $proc = proc_open($pp, $desc, $pipes);
+
+        if ($proc === false) {
+            debug(1, 'failed to execute command: {cmd}', [ 'cmd' => $cmd ]);
+            exit(1);
+        }
+
+        fwrite($pipes[0], $buf);
+
+        $code = proc_close($proc);
+
+        $buf = file_get_contents($stdout);
+
+        if ($code !== 0) {
+            error('post processor failed ({cmd}), returned code {code}', [ 'code' => $code, 'cmd' => $pp ]);
+            echo file_get_contents($stderr);
+            exit(2);
+        }
+
+        unlink($stdout);
+        unlink($stderr);
+    }
+
+    fwrite($out, $buf);
+}
+
+
+/**
+ * Define a post-processor
+ *
+ * @param string $args The argument string
+ * @param array $processors The array of existing post processors
+ */
+function set_postProcessor(string $args, array &$processors) {
+    $processors[] = $args;
+}
+
+
+/**
+ * Generate a temporary file name
+ */
+function mktemp() {
+    return tempnam(sys_get_temp_dir(), rand(1000, 9999));
+}
+
+
+function new_scope() {
+    return [
+        'defaults' => [
+            'suffix' => '',
+            'target' => '{pack}{suffix}'
+        ],
+        'postProcessors' => [],
+        'assetPaths' => [],
+    ];
+}
+
+
+function parse(string $pack) {
+    $scope = new_scope();
+    extract($scope);
 
     if (!file_exists($pack)) {
         error("pack file doesn't exist: {pack}", ['pack' => $pack]);
@@ -296,17 +449,20 @@ for ($i=1; $i<$ac; $i++) {
     $options = array_merge($defaults, []);
     $options['pack'] = $pack;
 
-    $cf = @fopen("$pack.tmp", "w");
-    flock($cf, LOCK_EX);
+    $symbols = [];
 
     $assets = explode("\n", file_get_contents(basename($pack)));
+
+    $outtmp = mktemp();
+    $cf = @fopen($outtmp, "w");
+    flock($cf, LOCK_EX);
 
     $lc = count($assets);
     for ($l=0; $l<$lc; $l++) {
         $asset = $assets[$l];
 
         if (preg_match('/(^#|^$|^\s+$)/', $asset)) {
-            debug(2, '{file}:{line} empty line or comment', [
+            debug(3, '{file}:{line} empty line or comment', [
                 'file' => $pack,
                 'line' => $l
             ]);
@@ -314,24 +470,43 @@ for ($i=1; $i<$ac; $i++) {
         }
 
         while (substr($assets[$l+1], 0, 1) === ' ') {
-            debug(2, 'escape line break, asset continues on next line');
+            debug(3, 'escape line break, asset continues on next line');
             $next = $assets[++$l];
             $asset .= ' '.preg_replace('/^\s+/', '', $next);
         }
 
         $paths = [];
+        $subfn = function ($str) use ($options, $symbols) {
+            return substitute($str, array_merge($options, $symbols));
+        };
+        $cmd = substr($asset, 0, strpos($asset, ' '));
 
-        $asset = substitute($asset, $options);
+        switch($cmd) {
 
-        if (substr($asset, 0, 4) === 'set ') {
-            set_opt(substr($asset, 4), $options);
-            continue;
-        } elseif (substr($asset, 0, 4) === 'git ') {
-            $paths = fetch_git(substr($asset, 4), $cwd);
-        } elseif (substr($asset, 0, 8) === 'https://') {
-            $paths = fetch_https($asset, $cwd);
-        } else {
-            $paths = fetch_local($asset, $cwd);
+            case 'set':
+                set_opt($subfn(substr($asset, 4)), $options);
+                continue 2;
+
+            case 'def':
+                def_symbol($subfn(substr($asset, 4)), $symbols);
+                continue 2;
+
+            case 'git':
+                $paths = fetch_git($subfn(substr($asset, 4)), $cwd);
+                break;
+
+            case 'post':
+                set_postProcessor($subfn(substr($asset, 5)), $postProcessors);
+                continue 2;
+
+            default:
+                $asset = $subfn($asset);
+                if (substr($asset, 0, 8) === 'https://') {
+                    $paths = fetch_https($asset, $cwd);
+                } else {
+                    $paths = fetch_local($asset, $cwd);
+                }
+
         }
 
         if (count($paths) === 0) {
@@ -343,73 +518,64 @@ for ($i=1; $i<$ac; $i++) {
         }
 
         foreach ($paths as $path) {
-            $af = @fopen($path, 'r');
-
-            if (!$af) {
-                error('failed to open {file} for reading, is the asset path correct?', [
-                    'file' => $path
-                ]);
-                exit(1);
-            }
-
-            flock($af, LOCK_SH);
-
-            while (!feof($af)) {
-                fwrite($cf, fread($af, 4096 * 16));
-            }
-
-            flock($af, LOCK_UN);
-            fclose($af);
+            info('asset {path}', [ 'path' => $path ]);
+            post_process($path, $cf, $postProcessors);
         }
 
+        $assetPaths = array_merge($assetPaths, $paths);
     }
 
     flock($cf, LOCK_UN);
     fclose($cf);
 
-    if (isset($options['post_processor'])) {
-        debug(1, 'running post processor: {pp}', [ 'pp' => $options['post_processor'] ]);
-
-        $desc = [
-            0 => array('pipe', 'r'),
-            1 => array('file', "$pack.tmp.out", 'w'),
-            2 => array('pipe', 'w')
-        ];
-        $cmd = $options['post_processor'];
-        $proc = proc_open($cmd, $desc, $pipes, $cwd);
-
-        if ($proc === false) {
-            debug(1, 'failed to execute command: {cmd}', [ 'cmd' => $cmd ]);
-            exit(1);
-        }
-
-        $if = @fopen("$pack.tmp", 'r');
-        if ($if === false) {
-            error('failed to open file for reading: {file}', [ 'file' => "$pack.tmp" ]);
-            exit(1);
-        }
-
-        flock($if, LOCK_SH);
-
-        while (!feof($if)) {
-            fwrite($pipes[0], fread($if, 4096 * 16));
-        }
-
-        flock($if, LOCK_UN);
-        fclose($if);
-
-        proc_close($proc);
-
-        rename("$pack.tmp.out", "$pack.tmp");
-
-    }
-
     $target = $options['target'];
-    foreach ($options as $k => $v) {
+    foreach (array_merge($options, $symbols) as $k => $v) {
         $target = str_replace('{'.$k.'}', $v,  $target);
     }
 
-    rename("$pack.tmp", $target);
+    rename($outtmp, $target);
+}
+
+
+$options = [
+    'log-level' => 4
+];
+
+$files = [];
+
+if (count($argv) === 0) {
+    usage();
+}
+
+$ac = count($argv);
+for ($i=1; $i<$ac; $i++) {
+
+    if (strpos($argv[$i], '--') === 0) {
+        $opt = substr($argv[$i], 2);
+        switch ($opt) {
+
+            case 'log-level':
+                $options[$opt] = $argv[++$i];
+                continue 2;
+
+            case 'quiet':
+                $options['log-level'] = 0;
+                continue 2;
+
+            case '--help':
+                usage();
+
+            default:
+                error('unknown option: {opt}', [ 'opt' => $opt ]);
+                exit(1);
+
+        }
+    }
+
+    $files[] = $argv[$i];
 
 }
 
+foreach ($files as $file) {
+    parse($file);
+}
