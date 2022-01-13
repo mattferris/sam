@@ -359,11 +359,24 @@ function post_process(string $path, $out, array $processors) {
         exit(1);
     }
 
+    $parts = explode('.', $path);
+    $ext = array_pop($parts);
+
+    $extProcessors = [];
+    if (isset($processors[$ext])) {
+        $extProcessors = $processors[$ext];
+    } elseif (isset($processors['*'])) {
+        $extProcessors = $processprs['*'];
+    } else {
+        debug(1, 'no post processors defined for extension {ext}', [ 'ext' => $ext ]);
+        return;
+    }
+
     $buf = file_get_contents($path);
     $tmp = sys_get_temp_dir();
 
     debug(1, 'processing {file}', [ 'file' => $path ]);
-    foreach ($processors as $pp) {
+    foreach ($extProcessors as $pp) {
         $stdout = mktemp();
         $stderr = mktemp();
 
@@ -409,7 +422,15 @@ function post_process(string $path, $out, array $processors) {
  * @param array $processors The array of existing post processors
  */
 function set_postProcessor(string $args, array &$processors) {
-    $processors[] = $args;
+    $sep = strpos($args, ' ');
+    $exts = explode(',', substr($args, 0, $sep));
+    $cmd = substr($args, $sep + 1);
+    foreach ($exts as $ext) {
+        if (!isset($processors[$ext])) {
+           $processors[$ext] = [];
+        }
+        $processors[$ext][] = $cmd;
+    }
 }
 
 

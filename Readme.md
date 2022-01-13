@@ -99,10 +99,12 @@ Using git to reference assets can be nice because you can pin the included asset
 git git@github.com:user/assets 87dfba2 css/remote.css
 ```
 
-Finally, you can specify a post-processor to complete any final processing of the file. This is useful if you want to minify the assets. You can define as many post-processors as you want. They will be run in the order they are defined. Each post-processor is run for each asset. A post-processor will only run for assets that come after it.
+Finally, you can specify a post-processor to complete any final processing of an asset. A post-processor is defined for one or more file extensions. A post-processors can also be defined for all extensions using an asterisk (`*`). This is useful if you want to minify the assets. You can define as many post-processors as you want. They will be run in the order they are defined. Each post-processor is run for each asset. A post-processor will only run for assets that come after it.
 
 ```
-post /path/to/minifier
+post js /path/to/jslint
+post css,sass /path/to/sassc --type=css
+post * /path/to/minify
 ```
 
 Taking all the above, the resulting pack file might look like so.
