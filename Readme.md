@@ -114,7 +114,7 @@ Taking all the above, the resulting pack file might look like so.
 
 # options
 set suffix .smaller.css
-post /path/to/minifier
+post css /path/to/minifier
 
 # path to local assets
 def path /home/user/assets
