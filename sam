@@ -193,9 +193,8 @@ function sanitize(string $res): string {
  * Fetch a remote or local GIT repository
  *
  * @param string $asset The asset definition
- * @param string $cwd The current working directory for the process
  */
-function fetch_git(string $asset, string $cwd) {
+function fetch_git(string $asset) {
     if (empty($asset)) {
         error('empty asset definition');
         return;
@@ -237,7 +236,7 @@ function fetch_git(string $asset, string $cwd) {
     }
 
     if ($fetch) {
-        $res = pexec("/usr/bin/git clone $src $dst", $cwd); 
+        $res = pexec("/usr/bin/git clone $src $dst", getcwd()); 
         if ($res['rc'] !== 0) {
             error("failed to clone {src} to {dst}: {err} ({rc})", [
                 'src' => $src,
@@ -272,9 +271,8 @@ function fetch_git(string $asset, string $cwd) {
  * Fetch a remote asset over HTTPS
  *
  * @param string $asset The asset definition
- * @param string $cwd The current working directory for the process
  */
-function fetch_https(string $asset, string $cwd) {
+function fetch_https(string $asset) {
     $parts = explode(' ', $asset);
 
     if (!isset($parts[1])) {
@@ -334,9 +332,8 @@ function fetch_https(string $asset, string $cwd) {
  * Fetch an asset local to the project
  *
  * @param string $asset The asset definition
- * @param string $cwd The current working directory 
  */
-function fetch_local(string $asset, string $cwd) {
+function fetch_local(string $asset) {
     if (!file_exists($asset)) {
         error('asset not found: {asset}', [ 'asset' => $asset ]);
         return;
@@ -366,10 +363,9 @@ function post_process(string $path, $out, array $processors) {
     if (isset($processors[$ext])) {
         $extProcessors = $processors[$ext];
     } elseif (isset($processors['*'])) {
-        $extProcessors = $processprs['*'];
+        $extProcessors = $processors['*'];
     } else {
         debug(1, 'no post processors defined for extension {ext}', [ 'ext' => $ext ]);
-        return;
     }
 
     $buf = file_get_contents($path);
@@ -442,10 +438,10 @@ function mktemp() {
 }
 
 
-function new_scope() {
+function new_scope(): array {
     return [
         'defaults' => [
-            'suffix' => '',
+            'suffix' => '.out',
             'target' => '{pack}{suffix}'
         ],
         'postProcessors' => [],
@@ -454,29 +450,13 @@ function new_scope() {
 }
 
 
-function parse(string $pack) {
-    $scope = new_scope();
-    extract($scope);
+function parsePack(string $pack, array &$options, array &$symbols, &$postProcessors): array {
+    $assets = explode("\n", file_get_contents($pack));
+    $assetPaths = [];
 
-    if (!file_exists($pack)) {
-        error("pack file doesn't exist: {pack}", ['pack' => $pack]);
-        exit(1);
-    }
-
-    $cwd = dirname($pack);
-    $pack = basename($pack);
-    chdir($cwd);
-
-    $options = array_merge($defaults, []);
-    $options['pack'] = $pack;
-
-    $symbols = [];
-
-    $assets = explode("\n", file_get_contents(basename($pack)));
-
-    $outtmp = mktemp();
-    $cf = @fopen($outtmp, "w");
-    flock($cf, LOCK_EX);
+    $oldcwd = getcwd();
+    $newcwd = dirname($pack);
+    chdir($newcwd);
 
     $lc = count($assets);
     for ($l=0; $l<$lc; $l++) {
@@ -513,19 +493,33 @@ function parse(string $pack) {
                 continue 2;
 
             case 'git':
-                $paths = fetch_git($subfn(substr($asset, 4)), $cwd);
+                $paths = fetch_git($subfn(substr($asset, 4)));
                 break;
 
             case 'post':
                 set_postProcessor($subfn(substr($asset, 5)), $postProcessors);
                 continue 2;
 
+            case 'import':
+                $importPack = $subfn(substr($asset, 7));
+                $parsedPaths = parsePack($importPack, $options, $symbols, $postProcessors);
+                $parentDir = dirname($importPack);
+                $paths = [];
+                foreach ($parsedPaths as $path) {
+                    $fc = substr($path, 0, 1);
+                    if ($fc !== '/') {
+                        $path = $parentDir.DIRECTORY_SEPARATOR.$path;
+                    }
+                    $paths[] = $path;
+                }
+                break;
+
             default:
                 $asset = $subfn($asset);
                 if (substr($asset, 0, 8) === 'https://') {
-                    $paths = fetch_https($asset, $cwd);
+                    $paths = fetch_https($asset);
                 } else {
-                    $paths = fetch_local($asset, $cwd);
+                    $paths = fetch_local($asset);
                 }
 
         }
@@ -539,11 +533,47 @@ function parse(string $pack) {
         }
 
         foreach ($paths as $path) {
-            info('asset {path}', [ 'path' => $path ]);
-            post_process($path, $cf, $postProcessors);
+            if (!isset($assetPaths[$path])) {
+                $assetPaths[$path] = true;
+            } else {
+                debug(2, 'skipping duplicate asset {file}', [ 'file' => $path ]);
+            }
         }
+    }
 
-        $assetPaths = array_merge($assetPaths, $paths);
+    chdir($oldcwd);
+
+    return array_keys($assetPaths);
+}
+
+
+function parse(string $pack) {
+    $scope = new_scope();
+    extract($scope);
+
+    if (!file_exists($pack)) {
+        error("pack file doesn't exist: {pack}", ['pack' => $pack]);
+        exit(1);
+    }
+
+    $cwd = dirname($pack);
+    $pack = basename($pack);
+    chdir($cwd);
+
+    $options = array_merge($defaults, []);
+    $options['pack'] = $pack;
+
+    $symbols = [];
+
+    $outtmp = mktemp();
+    $cf = @fopen($outtmp, "w");
+    flock($cf, LOCK_EX);
+
+    $paths = parsePack($pack, $options, $symbols, $postProcessors);
+
+    foreach ($paths as $path) {
+        info('asset {path}', [ 'path' => $path ]);
+        post_process($path, $cf, $postProcessors);
     }
 
     flock($cf, LOCK_UN);

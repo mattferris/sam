@@ -3,6 +3,9 @@ Smart Asset Manager
 
 SAM (Smart Asset Manager) or just *sam*, can be used to manage web assets such as CSS and JavaScript files. It works on the concept of asset *packs*. Each *pack* defines what files are to be included, how to fetch the files, how files should be processed, and what the resulting *packed* file should be called.
 
+Defining assets
+---------------
+
 Most lines in a *pack* file represent one or more assets to include. A simple asset pack might just be used to assemble a number of CSS files into a single file. Lines starting with `#` are comments.
 
 ```
@@ -18,11 +21,14 @@ Run sam to package the assets.
 
 ```
 # ./sam assets.pack
-# ls assets.pack.min.css
-assets.pack.min.css
+# ls assets.pack.out
+assets.pack.out
 ```
 
-The resulting file is the pack name suffixed with `min.css`. You can define a custom suffix be specifying it in the pack file.
+Options and variables
+---------------------
+
+You can define a custom suffix by specifying it in the pack file. The default suffix is `.out`.
 
 ```
 # assets.pack
@@ -57,6 +63,11 @@ def path /home/user/css
 {path}/reset.css
 ```
 
+Note that any duplicate asset paths are ignored.
+
+Remote assets
+-------------
+
 It's possible to include remote assets, too. Sam supports accessing assets using HTTPS. Remotely accessed assets are cached locally, and the cached copy will be used until it is cleared from the cache. This improves performance, but also prevents issues that arise from the remote file not being accessible.
 
 Referencing a remote asset using HTTPS is pretty simple.
@@ -73,6 +84,9 @@ def remote_host https://www.example.com/assets/css
 {remote_host}/remote.css
 {remote_host}/more.css
 ```
+
+Git assets
+----------
 
 Files can also be included using git. This works for local and remote repositories. In both cases, the referenced repository is cloned into the local cached, and the appropriate commit is checked out, before accessing the asset. To use git assets, the `git` command used.
 
@@ -99,6 +113,22 @@ Using git to reference assets can be nice because you can pin the included asset
 git git@github.com:user/assets 87dfba2 css/remote.css
 ```
 
+Importing assets from another pack
+----------------------------------
+
+It's possible to import to assets from another pack file. The imported pack file is processed normally, except that any post-processors defined in the imported pack are ignored. Relative paths to assets are resolved to absolute paths before being included in the importing pack.
+
+Use `import` to import assets.
+
+```
+import /some/other/assets.pack
+```
+
+One advantage of using import is that remote assets in the imported pack will be resolved to the imported packs remote cache, preventing the assets from being fetched and stored in the importing packs remote cache.
+
+Post-processors
+---------------
+
 Finally, you can specify a post-processor to complete any final processing of an asset. A post-processor is defined for one or more file extensions. A post-processors can also be defined for all extensions using an asterisk (`*`). This is useful if you want to minify the assets. You can define as many post-processors as you want. They will be run in the order they are defined. Each post-processor is run for each asset. A post-processor will only run for assets that come after it.
 
 ```
@@ -106,6 +136,9 @@ post js /path/to/jslint
 post css,sass /path/to/sassc --type=css
 post * /path/to/minify
 ```
+
+Putting it all together
+-----------------------
 
 Taking all the above, the resulting pack file might look like so.
 
@@ -131,4 +164,7 @@ git {repo} master
 {path}/layout.css
 {path}/page.css
 {path}/reset.css
+
+# import common assets from another pack
+import common.pack
 ```
