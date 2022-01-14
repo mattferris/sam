@@ -25,6 +25,8 @@ Run sam to package the assets.
 assets.pack.out
 ```
 
+Note that any duplicate asset paths are ignored.
+
 Options and variables
 ---------------------
 
@@ -63,7 +65,15 @@ def path /home/user/css
 {path}/reset.css
 ```
 
-Note that any duplicate asset paths are ignored.
+### Available options
+
+| Name   | Default          | Description                      |
+|--------|------------------|----------------------------------|
+| suffix | `.out`           | The suffix of the resulting file |
+| target | `{pack}{suffix}` | The name of the resulting file   |
+| mode   | `0644`           | The mode of the resulting file   |
+| owner  | *null*           | The owner of the resulting file  |
+| group  | *null*           | The group of the resulting file  |
 
 Remote assets
 -------------

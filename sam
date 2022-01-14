@@ -115,6 +115,11 @@ function debug(int $level, string $tpl, array $vars = []) {
 
 /**
  * Execute a command using proc_open/proc_close
+ *
+ * @param string $cmd The command to execute
+ * @param string $path The path to execute the command in
+ * @param array $env The environment variables to set for the command
+ * @return array An array containing the exit code, and output from stdout/stderr
  */
 function pexec(string $cmd, string $path, array $env = []) {
     $desc = [
@@ -171,6 +176,13 @@ function set_opt(string $optdef, &$options) {
 }
 
 
+/**
+ * Replace the variables in a string with their values
+ *
+ * @param string $str The string to replace values in
+ * @param array $vars An array of defined variables
+ * @return string The string with substituted values
+ */
 function substitute(string $str, array $vars): string {
     foreach ($vars as $k => $v) {
         $str = str_replace('{'.$k.'}', $v, $str);
@@ -181,6 +193,9 @@ function substitute(string $str, array $vars): string {
 
 /**
  * Sanitize URL/path name for use as directory name
+ *
+ * @param string $res The URL/path to sanitize
+ * @return string The sanitized URL/path
  */
 function sanitize(string $res): string {
     $res = preg_replace('#^https://((.*:|).+@|)#', '', $res);
@@ -193,6 +208,7 @@ function sanitize(string $res): string {
  * Fetch a remote or local GIT repository
  *
  * @param string $asset The asset definition
+ * @return array One or more paths to the cached git repo
  */
 function fetch_git(string $asset) {
     if (empty($asset)) {
@@ -438,11 +454,17 @@ function mktemp() {
 }
 
 
+/**
+ * Return a new scope
+ */
 function new_scope(): array {
     return [
         'defaults' => [
             'suffix' => '.out',
-            'target' => '{pack}{suffix}'
+            'target' => '{pack}{suffix}',
+            'mode' => '0644',
+            'owner' => null,
+            'group' => null
         ],
         'postProcessors' => [],
         'assetPaths' => [],
@@ -450,6 +472,15 @@ function new_scope(): array {
 }
 
 
+/**
+ * Parse the lines within a pack file, return the list of parsed asset paths
+ *
+ * @param string $pack The path to the pack file
+ * @param array $options The existing options array
+ * @param array $symbols The existing symbols array
+ * @param array $postProcessors The exist postProcessors array
+ * @return array The parsed asset paths
+ */
 function parsePack(string $pack, array &$options, array &$symbols, &$postProcessors): array {
     $assets = explode("\n", file_get_contents($pack));
     $assetPaths = [];
@@ -582,6 +613,37 @@ function parse(string $pack) {
     $target = $options['target'];
     foreach (array_merge($options, $symbols) as $k => $v) {
         $target = str_replace('{'.$k.'}', $v,  $target);
+    }
+
+    debug(1, 'changing {path} to mode {mode}', [
+        'path' => $outtmp,
+        'mode' => $options['mode']
+    ]);
+    if (@chmod($outtmp, intval($options['mode'], 8)) === false) {
+        error('failed to set file mode for {path}', [ 'path' => $outtmp ]);
+        exit(1);
+    }
+
+    if (!is_null($options['owner'])) {
+        debug(1, 'changing {path} to owner {owner}', [
+            'path' => $outtmp,
+            'owner' => $options['owner'],
+        ]);
+        if (@chown($outtmp, $options['owner']) === false) {
+            error('failed to set owner for {path}', [ 'path' => $outtmp ]);
+            exit(1);
+        }
+    }
+
+    if (!is_null($options['group'])) {
+        debug(1, 'changing {path} to group {group}', [
+            'path' => $outtmp,
+            'group' => $options['group']
+        ]);
+        if (@chgrp($outtmp, $options['group']) === false) {
+            error('failed to set group for {path}', [ 'path' => $outtmp ]);
+            exit(1);
+        }
     }
 
     rename($outtmp, $target);
