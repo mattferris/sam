@@ -95,6 +95,12 @@ def remote_host https://www.example.com/assets/css
 {remote_host}/more.css
 ```
 
+You can also specify a SHA1 checksum for the asset, in which case the asset won't be included unless it matches the supplied checksum. The full checksum is not required, merely a prefix of one or more characters It's recommended that you specify a minimum of four characters, though seven or eight characters is likely good enough for most situations.
+
+```
+{remote_host}/remote.css 987be93a
+```
+
 Git assets
 ----------
 
@@ -122,6 +128,8 @@ Using git to reference assets can be nice because you can pin the included asset
 # pin remote.css to a specific commit
 git git@github.com:user/assets 87dfba2 css/remote.css
 ```
+
+Git assets are the most robust mechanism for referencing remote assets. Referencing assets by a specific commit (rather then branch name) ensures you'll always receive the same asset content. Referencing by commit ID also means the remote repository can continue to be updated without affecting the assets. Contrast this with HTTPS assets, where a newly published version of the remote asset will break the building of the pack if the asset isn't cached.
 
 Importing assets from another pack
 ----------------------------------
