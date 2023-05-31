@@ -1,0 +1,665 @@
+#!/usr/bin/php
+<?php
+
+const DEPLOY_OPT_NOTSPECIFIED = 1;
+const DEPLOY_OPT_BADARGCOUNT = 2;
+
+
+// map: key and value passed as args, value returned
+function kmap(array $data, callable $fn): array {
+    $result = [];
+    $keys = array_keys($data);
+    while ($k = array_shift($keys))
+        $result[] = $fn($k, $data[$k]);
+    return $result;
+}
+
+
+// map: value passed as arg, key and value returned
+function mapk(array $data, callable $fn): array {
+    $result = [];
+    while ($d = array_shift($data)) {
+        list($k, $v) = $fn($d);
+        $result[$k] = $v;
+    }
+    return $result;
+}
+
+
+// map: key and value passed as args, key and value returned
+function kmapk(callable $fn, array $data): array {
+    $result = [];
+    $keys = array_keys($data);
+    while ($k = array_shift($keys)) {
+        list($k, $v) = $fn($k, $data[$k]);
+        $result[$k] = $v;
+    }
+    return $result;
+}
+
+
+// shift the key and value from the first element of the array
+function shiftk(array &$arr): ?array {
+    if (count($arr) === 0) return null;
+    return [key($arr), array_shift($arr)];
+}
+
+
+function path(...$parts): string {
+    return implode(DIRECTORY_SEPARATOR, $parts);
+}
+
+
+function findroot(string $cwd): ?string {
+    $parts = explode(DIRECTORY_SEPARATOR, $cwd);
+    while (count($parts) > 0) {
+        if (file_exists("{$cwd}/.deploy")) return $cwd;
+        array_pop($parts);
+        $cwd = path(...$parts);
+    }
+    return null;
+}
+
+
+function relpath(string $tree, string $path): ?string {
+    $tree = rtrim($tree, '/');
+    return strpos($path, $tree) === 0 ? substr($path, strlen($tree) + 1) : null;
+}
+
+
+function optspec(string $spec): ?array {
+    $opts = [];
+    foreach (explode(' ', $spec) as $opt) {
+        $matches = [];
+        if (preg_match('/^([a-z][a-z0-9-]+)(\?|)(\:*|)$/', $opt, $matches) === 0)
+            trigger_error('bad option specification: '.$spec, E_USER_ERROR);
+        $opts[$matches[1]] = [ $matches[2] ? false : true, strlen($matches[3]) ];
+    }
+    return $opts;
+}
+
+
+function opts(array $inargs, string $optstr, callable $failed = null): array {
+    $failed = $failed ?: function () {};
+    $outopts = [];
+    $outargs = [];
+    $inopts = optspec($optstr);
+    while ($arg = array_shift($inargs)) {
+        if (substr($arg, 0, 2) === '--') {
+            $o = substr($arg, 2);
+            if (isset($inopts[$o])) {
+                $val = true;
+                if ($inopts[$o][1] > 0) {
+                    $val = [];
+                    $i = $inopts[$o][1];
+                    while ($i > 0 && $v = array_shift($inargs)) {
+                        $val[] = $v;
+                        $i--;
+                    }
+                }
+                $outopts[$o] = $val;
+                continue;
+            }
+        }
+        $outargs[] = $arg;
+    }
+
+    $return = [$outopts, $outargs];
+    foreach ($inopts as $o => $s)
+        if ($s[0] && !isset($outopts[$o]))
+            return $failed(DEPLOY_OPT_NOTSPECIFIED, $inopts, $o) ?: $return;
+        elseif ($s[0] && $s[1] > 0 && (!is_array($outopts[$o]) || count($outopts[$o]) !== $s[1]))
+            return $failed(DEPLOY_OPT_BADARGCOUNT, $inopts, $o) ?: $return;
+
+    return [$outopts, $outargs];
+}
+
+
+function lsdir(string $dir, bool $hidden = false): ?array {
+    $files = [];
+    if (!file_exists($dir)) return null;
+    if (!($dh = opendir($dir))) return null;
+    while ($file = readdir($dh)) {
+        if ($file === '..' || $file === '.') continue;
+        if (strpos($file, '.') === 0 && !$hidden) continue;
+        $files[] = $file;
+    }
+    closedir($dh);
+    return $files;
+}
+
+
+function rrmdir(string $dir): bool {
+    foreach (lsdir($dir, true) as $e)
+        if (is_dir($e) && !rrmdir($e)) return false;
+        elseif (!unlink($e)) return false;
+    return true;
+}
+
+
+function read(string $file): ?array {
+    return file_exists($file) ? file($file, FILE_IGNORE_NEW_LINES) : null;
+}
+
+
+function objid(string $data): ?string {
+    return sha1($data);
+}
+
+
+function objpath(string $id): string {
+    return path(substr($id, 0, 2), $id);
+}
+
+
+function objfpath(string $repo, string $id): string {
+    return path($repo, 'objects', objpath($id));
+}
+
+
+function objex(string $repo, string $id): bool {
+    return file_exists(objfpath($repo, $id));
+}
+
+
+function objput(string $repo, array $data): ?string {
+    $data = implode("\n", $data);
+    $id = objid($data);
+    $path = objfpath($repo, $id);
+    if (!is_dir(dirname($path))) mkdir(dirname($path));
+    if (objex($repo, $id) || file_put_contents($path, $data)) return $id;
+    return null;
+}
+
+
+function objget(string $repo, string $id): ?array {
+    $obj = file(objfpath($repo, $id));
+    if ($obj !== false) return $obj;
+    return null;
+}
+
+
+function objdel(string $repo, string $id): bool {
+    $path = objfpath($repo, $id);
+    return file_exists($path) && unlink($path);
+}
+
+
+function projpath(string $repo, string $name): string {
+    return path($repo, 'projects', $name);
+}
+
+
+function projex(string $repo, string $name): bool {
+    return file_exists(projpath($repo, $name));
+}
+
+
+function projadd(string $repo, string $name): bool {
+    return mkdir(projpath($repo, $name));
+}
+
+
+function projdel(string $repo, string $name): bool {
+    return rmdir(projpath($repo, $name));
+}
+
+
+function idxex(string $repo, string $project): bool {
+    return file_exists(path(projpath($repo, $project), 'index'));
+}
+
+
+function idxput(string $repo, string $project, array $commits): bool {
+    return file_put_contents(
+        path(projpath($repo, $project), 'index'),
+        implode("\n", $commits)."\n",
+        FILE_APPEND);
+}
+
+
+function idxget(string $repo, string $project): ?array {
+    $path = path(projpath($repo, $project), 'index');
+    return read($path);
+}
+
+
+function idxrm(string $repo, string $project): bool {
+    $path = path(projpath($repo, $project), 'index');
+    return file_exists($path) ? unlink($path) : false;
+}
+
+
+function comcur(string $projpath): ?string {
+    return tagget($projpath, 'latest');
+}
+
+
+function comput(array $lines): array {
+    return kmap($lines, function ($k, $v) { return "$k $v\n"; });
+}
+
+
+function comget(array $lines): array {
+    return mapk($lines, function ($l) { return explode(' ', rtrim($l, "\n")); });
+}
+
+
+function tagpath(string $projpath, string $name): string {
+    return path($projpath, 'tags', $name);
+}
+
+
+function tagex(string $projpath, string $name): bool {
+    return file_exists(tagpath($projpath, $name));
+}
+
+
+function tagget(string $projpath, string $name): ?string {
+    return tagex($projpath, $name) ? file_get_contents(tagpath($projpath, $name)) : null;
+}
+
+
+function tagput(string $projpath, string $name, string $commit): bool {
+    $tagpath = tagpath($projpath, $name);
+    if (!is_dir(dirname($tagpath))) mkdir(dirname($tagpath), 0750, true);
+    return file_put_contents(tagpath($projpath, $name), $commit);
+}
+
+
+function tagrm(string $projpath, string $name): bool {
+    $path = tagpath($projpath, $name);
+    return file_exists($path) ? unlink($path) : false;
+}
+
+
+function refcnt(array &$refcnt, string $id) {
+    if (!isset($refcnt[$id])) $refcnt[$id] = 0;
+    $refcnt[$id]++;
+}
+
+
+function logger(string $msg, array $data = []) {
+    if (count($data) > 0) {
+        $keys = array_keys($data);
+        $keys = array_map(function ($i) { return '{'.$i.'}'; }, $keys);
+        $vals = array_values($data);
+        $msg = str_replace($keys, $vals, $msg);
+    }
+    printf("%s\n", $msg);
+}
+
+
+function err(int $code, string $msg, array $data = []) {
+    logger("error: $msg", $data);
+    exit($code);
+}
+
+
+function warn(string $msg, array $data = []) {
+    return logger("warning: $msg", $data);
+}
+
+
+function info(string $msg, array $data = []) {
+    return logger("info: $msg", $data);
+}
+
+
+function usage(string $msg, array $data = []) {
+    global $argv;
+    logger("usage: {$argv[0]} $msg", $data);
+    exit(1);
+}
+
+
+function eprojnotfound(string $project) {
+    err(2, 'project not found: {p}', ['p' => $project]);
+}
+
+
+
+function cmd_init(string $cwd): int {
+    $base = path($cwd, '.deploy');
+
+    if (is_dir($base))
+        err(1, 'already initialized');
+
+    mkdir(path($base, 'projects'), 0750, true);
+    mkdir(path($base, 'objects'), 0750, true);
+    info('initialized deploy repo in {d}', ['d' => $cwd]);
+    return 0;
+}
+
+
+function cmd_add(string $cwd, string $tree, string $repo, array $args): int {
+    $usage = 'add [ --help ] <project> <file>';
+
+    list($opts, $args) = opts($args, 'help?',
+        function () use ($usage) { usage($usage); });
+
+    if (isset($opts['help'])) usage($usage);
+
+    $store = path($repo, 'objects');
+    $project = array_shift($args);
+
+    if (!projex($repo, $project)) eprojnotfound($project);
+
+    $last = comcur(projpath($repo, $project));
+    $prev = [];
+    if (!is_null($last))
+        $prev = comget(objget($repo, $last));
+
+    $cur = mapk($args,
+        function (string $file) use ($cwd, $tree, $repo) {
+            $id = objput($repo, read(path($cwd, $file)));
+            if (is_null($id))
+                warn('failed to add file: {f}', ['f' => $file]);
+            return [ relpath($tree, path($cwd, $file)), $id ];
+        });
+
+    idxput($repo, $project, kmap(array_merge($prev, $cur),
+        function ($k, $v) { return sprintf("%s %s", $k, $v); }));
+
+    return 0;
+}
+
+
+function cmd_project(string $cwd, string $tree, string $repo, array $args): int {
+    $usage = 'project [ --help | --delete <project> | --add <project> ]';
+
+    list($opts, $args) = opts($args, 'help? delete?: add?:',
+        function () use ($usage) { usage($usage); });
+
+    if (isset($opts['help'])) usage($usage);
+
+    if (isset($opts['delete'])) {
+
+        $project = $opts['delete'][0];
+        if (projex($repo, $project))
+            projdel($repo, $project) ||
+                err(2, 'failed to delete project: {p}', ['p' => $project]);
+
+        info('deleted project {p}', ['p' => $project]);
+
+    } elseif (isset($opts['add'])) {
+
+        $project = $opts['add'][0];
+
+        if (projex($repo, $project))
+            err(2, 'project already exists: {p}', ['p' => $project]);
+
+        projadd($repo, $project) ||
+            err(2, 'failed to create project: {p}', ['p' => $project]);
+
+        info('created project {p}', ['p' => $project]);
+
+    } else {
+
+        array_map(function ($p) { printf("%s\n", $p); }, lsdir(path($repo, 'projects')));
+
+    }
+
+    return 0;
+}
+
+
+function cmd_status(string $cwd, string $tree, string $repo, array $args): int {
+    list($opts, $args) = opts($args, 'help?');
+    if(isset($opts['help']) || count($args) === 0) usage('status <project>');    
+
+    $project = array_shift($args);
+
+    if (!projex($repo, $project)) eprojnotfound($project);
+
+    // if no index, then nothing to report, so return
+    if (!idxex($repo, $project)) return 0;
+
+    $last = comcur(projpath($repo, $project));
+    $current = !is_null($last) && objex($repo, $last) ? comget(objget($repo, $last)) : [];
+    $index = comget(idxget($repo, $project));
+
+    $new = $mod = [];
+    while (list($file, $id) = shiftk($index))
+        if (!isset($current[$file])) $new[$file] = $id;
+        elseif ($current[$file] !== $id) $mod[$file] = $id;
+        else unset($current[$file]);
+
+    $del = $current;
+
+    if (count($new) > 0)
+        foreach (array_keys($new) as $file)
+            printf("  + %s\n", $file);
+
+    elseif (count($mod) > 0)
+        foreach (array_keys($mod) as $file)
+            printf("  * %s\n", $file);
+
+    elseif (count($del) > 0)
+        foreach (array_keys($del) as $file)
+            printf("  - %s\n", $file);
+
+    return 0;
+}
+
+
+function cmd_diff(string $cwd, string $tree, string $repo, array $args): int {
+    list($opts, $args) = opts($args, 'help?');
+    if (isset($opts['help']) || count($args) < 2) usage('diff <project> <file>');
+
+    $project = array_shift($args);
+    $file = array_shift($args);
+    $relfile = relpath($tree, path($cwd, $file));
+
+    if (!projex($repo, $project)) eprojnotfound($project);
+
+    if (!file_exists(path($tree, $file)))
+        err(1, 'unknown path: {p}', ['p' => $file]);
+
+    $last = comcur(projpath($repo, $project));
+    $current = !is_null($last) && objex($repo, $last) ? comget(objget($repo, $last)) : [];
+
+    if (!isset($current)) {
+        info('{f} has not been committed', ['f' => $relpath]);
+        return 1;
+    }
+
+    $retcode = 0;
+    passthru(sprintf("diff -u %s %s",
+        objfpath($repo, $current[$relfile]), escapeshellarg($file)), $retcode);
+
+    if ($retcode > 1)
+        err(3, 'failed to execute diff command; check that it is available in PATH');
+
+    return 0;
+}
+
+
+function cmd_commit(string $cwd, string $tree, string $repo, array $args): int {
+    $usage = 'commit [ --help | --discard ] <project>';
+
+    list($opts, $args) = opts($args, 'help? discard?:',
+        function() use ($usage) { return usage($usage); });
+
+    if (isset($opts['help']) || count($args) === 0) usage($usage);
+
+    $project = array_shift($args);
+
+    if (count($args) > 0)
+        err(1, 'too many arguments');
+
+    if (!projex($repo, $project)) eprojnotfound($project);
+
+    if (!isset($opts['discard'])) {
+        $projpath = projpath($repo, $project);
+
+        $id = objput($repo, idxget($repo, $project));
+
+        if (is_null($id))
+            err(3, 'failed to commit index');
+
+        tagput($projpath, 'latest', $id) ||
+            err(3, 'failed to create tag "latest"');
+
+        $datetag = (new Datetime())->format('Y.m.d-H:i:s');
+        tagput($projpath, $datetag, $id) ||
+            err(3, 'failed to create tag "'.$datetag.'"');
+
+        info('committed as {id}', ['id' => $id]);
+    }
+
+    idxrm($repo, $project) ||
+        err(3, 'failed to remove index');
+
+    return 0;
+}
+
+
+function cmd_tag(string $cwd, string $tree, string $repo, array $args): int {
+    $usage = 'tag [ --help ] <project> [ <tag> <commit> | --delete <tag> ]';    
+
+    list($opts, $args) = opts($args, 'help? delete?:',
+        function() use ($usage) { return usage($usage); });
+
+    if (isset($opts['help']) || count($args) === 0) usage($usage);
+
+    $project = array_shift($args);
+    $projpath = projpath($repo, $project);
+
+    if (!projex($repo, $project)) eprojnotfound($project);
+
+    if (isset($opts['delete'])) {
+        $name = $opts['delete'][0];
+
+        tagex($projpath, $name) ||
+            err(3, 'tag not found');
+
+        tagrm($projpath, $name) ||
+            err(3, 'failed to remove tag');
+    }
+    else {
+        array_map(function ($t) use ($projpath) { printf("%s -> %s\n", $t, tagget($projpath, $t)); }, lsdir(path($projpath, 'tags')));
+    }
+
+    return 0;
+}
+
+
+function cmd_gc(string $cwd, string $tree, string $repo, array $args): int {
+    $objs = [];
+    $refs = [];
+
+    /*
+     * Get a list of all the objects
+     */
+    $paths = [];
+    $paths[] = path($repo, 'objects');
+    while ($path = array_shift($paths)) {
+        if (is_dir($path)) {
+            array_map(function ($p) use (&$paths, $path) { $paths[] = path($path, $p); }, lsdir($path));
+        } else {
+            $id = basename($path);
+            refcnt($objs, $id);
+        }
+    }
+
+    /*
+     * Get a list of all the commits, and the objects referred to by the commits
+     */
+    $projects = lsdir(path($repo, 'projects'));
+    while ($project = array_shift($projects)) {
+        $projpath = projpath($repo, $project);
+        $tags = lsdir(path($projpath, 'tags'));
+        while ($tag = array_shift($tags)) {
+            $comid = tagget($projpath, $tag);
+            $comobj = comget(objget($repo, $comid));
+            while ($id = array_shift($comobj)) {
+                refcnt($refs, $id);
+            }
+            refcnt($refs, $comid);
+        }
+    }
+
+    /*
+     * Delete objects that are no longer referenced
+     */
+    while ($id = array_key_first($objs)) {
+        if (!isset($refs[$id])) objdel($repo, $id);
+        array_shift($objs);
+    }
+
+    return 0;
+}
+
+
+function main() {
+    global $argv;
+    $args = $argv;
+    $cwd = getcwd();
+    $tree = findroot($cwd);
+    $repo = path($tree, '.deploy');
+    $me = array_shift($args);
+    $cmd = array_shift($args);
+
+    switch ($cmd) {
+        case 'init':
+        case 'add':
+        case 'status':
+        case 'diff':
+        case 'commit':
+        case 'project':
+        case 'tag':
+        case 'gc':
+            break;
+        default:
+            echo <<<EOF
+
+usage: {$me} { init | add | status | commit | project | tag | gc }
+
+    init
+
+        Initialize a project repo in this folder
+
+    add <project> <file1> [ <file2> ... ]
+
+        Stage assets to be commited to the specified project
+
+    status <project>
+
+        Check what files have been staged for the specified project
+
+    diff <project> <file>
+
+        Print the changes in a file since the last commit
+
+    commit <project> [ --discard | <tag1> ... ]
+
+        Commit the staged files for the specified project, and apply the
+        specified tags
+
+    project [ --delete <project> | --add <project> ]
+
+        List projects, create a new project, or delete a project
+
+    tag <project> [ <tag> <commit> | --delete <tag> ]
+
+        Tag a commit within the specified project, or delete a tag
+
+    gc
+
+        Prune unreferenced objects from the repo (garbage collection)
+
+
+EOF;
+            return 1;
+    }
+
+    if (is_null($tree) && $cmd !== 'init') {
+        err(1, 'unable to locate working tree');
+    }
+
+    return call_user_func("cmd_{$cmd}", $cwd, $tree, $repo, $args);
+}
+
+
+exit(main());
