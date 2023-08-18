@@ -97,7 +97,7 @@ https://www.example.com/assets/css/remote.css
 ```
 
 If there was more then once asset on the remote host, you could use variables to
-make our life easier.
+make your life easier.
 
 ```
 def remote_host https://www.example.com/assets/css
@@ -108,7 +108,7 @@ def remote_host https://www.example.com/assets/css
 
 You can also specify a SHA1 checksum for the asset, in which case the asset won't
 be included unless it matches the supplied checksum. The full checksum is not
-required, merely a prefix of one or more characters It's recommended that you
+required, merely a prefix of one or more characters. It's recommended that you
 specify a minimum of four characters, though seven or eight characters is likely
 good enough for most situations.
 
@@ -121,8 +121,8 @@ Git assets
 
 Files can also be included using git. This works for local and remote
 repositories. In both cases, the referenced repository is cloned into the local
-cached, and the appropriate commit is checked out, before accessing the asset. To
-use git assets, the `git` command used.
+cached, and the appropriate commit is checked out before accessing the asset. To
+use git assets, use the `git` command.
 
 ```
 # local repo
@@ -185,7 +185,7 @@ post-processor can also be defined for all extensions using an asterisk (`*`).
 This is useful if you want to minify the assets. You can define as many
 post-processors as you want. They will be run in the order they are defined. Each
 post-processor is run for each asset. A post-processor will only run for assets
-that come after it.
+that defined after it in the pack file.
 
 ```
 post js /path/to/jslint
@@ -246,7 +246,8 @@ info: initialized deploy repo in ~user/assets
 
 A single repository can handle multiple collections of assets. These collections
 are referred to as *projects*. A *project* lets you organize and version assets
-independent of each other. Projects can be added and removed as necessary.
+independent of each other. Projects can be added and removed as necessary. When
+a repository is initialized, a `default` project is created automatically.
 
 ```
 # deploy project --add main
@@ -260,10 +261,10 @@ commit is created, two tags are automatically created which refer to the commit:
 commit was created (e.g. `2023.05.29-16:30:20`).
 
 ```
-# deploy add main foo.css
+# deploy add --project main foo.css
 # deploy commit main
 info: committed as c04e858b003cefb5642903f0495f70f6c17de25e
-# deploy tag main
+# deploy tag --project main
 2023.05.29-16:30:20 -> c04e858b003cefb5642903f0495f70f6c17de25e
 latest -> c04e858b003cefb5642903f0495f70f6c17de25e
 ```
@@ -281,6 +282,51 @@ To push remotely, use `scp` or `rsync` instead.
 # scp -r .deploy example.com:/var/www/assets
 # rsync .deploy example.com:/var/www/assets
 ```
+
+Alternatively, `deploy` provides a `push` command which can simplify deployment
+to remote servers or services. First a *remote* must be defined. At this time,
+*remote*s must be defined manually.
+
+To create a *remote* for OVH object storage, we would create a new file under
+`.deploy/remotes` called `ovh`.
+
+```
+env /home/user/.config/sam/deploy.env
+dest common/ver
+exec swift --os-auth-url {OS_AUTH_URL} --auth-version 3 --os-tenant-name {OS_TENANT_NAME} --os-project-name {OS_TENANT_NAME} --os-username {OS_USERNAME} upload --header 'Content-Type: {DEPLOY_MIME}' --object-name {DEPLOY_DEST} Static {DEPLOY_SRC}
+```
+
+The first line defines a file to read environment variables from. The second line of the *remote* file defines a destination folder. The third line, defines the command to execute for each file that needs to be deployed. The curly braces are used to reference environment variables.
+
+The contents of the environment file looks like so.
+
+```
+OS_AUTH_URL https://auth.cloud.ovh.net/v3
+OS_TENANT_ID 09809e7c712312a09723879e987987cb1983
+OS_TENANT_NAME 908230498029374873
+OS_USERNAME user-09234oijwdf0
+OS_PASSWORD 098u0o2i3jloaisudpf9u
+OS_REGION_NAME BHS
+```
+
+Each line defined a name and value pair, separated by a space.
+
+One defined, you can use the `push` command to deploy your assets automatically.
+
+```
+# deploy push --project main ovh
+info: pushing objects/d7/d76009f3e8533dcee64ea80fd671ba665b4cfb82
+info: pushing objects/c8/c8f9738701a05e1ed83aac8e958798c2524eee2d
+info: pushing objects/96/969efc7579f3b515a419c739d701d3fdb766336d
+info: pushing objects/3b/3b959ae62204e69666984dd0bc125c6ce8ed4956
+info: pushing projects/identity/tags/latest
+```
+
+Not only does `push` automate the method of deployment, it also ensures that
+each deployment is atomic. Tags will not be deployed until the entire commit
+has been deployed first. Without this consideration, a tag would reference a
+commit that doesn't exist, or assets that are still in the process of being
+deployed.
 
 ### How to reference a versioned asset
 
