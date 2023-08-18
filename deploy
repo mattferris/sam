@@ -131,8 +131,9 @@ function lsdir(string $dir, bool $hidden = false): ?array {
 
 function rrmdir(string $dir): bool {
     foreach (lsdir($dir, true) as $e)
-        if (is_dir($e) && !rrmdir($e)) return false;
-        elseif (!unlink($e)) return false;
+        $ep = path($dir, $e);
+        if (is_dir($ep) && !rrmdir($ep)) return false;
+        elseif (!is_dir($ep) && !unlink($ep)) return false;
     return true;
 }
 
@@ -201,7 +202,7 @@ function projadd(string $repo, string $name): bool {
 
 
 function projdel(string $repo, string $name): bool {
-    return rmdir(projpath($repo, $name));
+    return rrmdir(projpath($repo, $name));
 }
 
 
@@ -273,6 +274,31 @@ function tagrm(string $projpath, string $name): bool {
 }
 
 
+function rmtpath(string $repo, string $name): string {
+    return path($repo, 'remotes', $name);
+}
+
+
+function rmtex(string $repo, string $name): bool {
+    return file_exists(rmtpath($repo, $name));
+}
+
+
+function rmtget(string $repo, string $name): ?array {
+    if (!rmtex($repo, $name)) return null;
+    $data = file(rmtpath($repo, $name), FILE_SKIP_EMPTY_LINES|FILE_IGNORE_NEW_LINES);
+    $remote = [];
+    while ($line = array_shift($data)) {
+        if (strpos($line, '#') === 0) continue;
+        $pos = strpos($line, ' ');
+        $key = substr($line, 0, $pos);
+        $val = substr($line, $pos+1);
+        $remote[$key] = $val;
+    }
+    return $remote;
+}
+
+
 function refcnt(array &$refcnt, string $id) {
     if (!isset($refcnt[$id])) $refcnt[$id] = 0;
     $refcnt[$id]++;
@@ -306,6 +332,11 @@ function info(string $msg, array $data = []) {
 }
 
 
+function dbg(string $msg, array $data = []) {
+    return logger("debug: $msg", $data);
+}
+
+
 function usage(string $msg, array $data = []) {
     global $argv;
     logger("usage: {$argv[0]} $msg", $data);
@@ -317,6 +348,52 @@ function eprojnotfound(string $project) {
     err(2, 'project not found: {p}', ['p' => $project]);
 }
 
+
+/**
+ * Execute a command using proc_open/proc_close
+ *
+ * @param string $cmd The command to execute
+ * @param string $path The path to execute the command in
+ * @param array $env The environment variables to set for the command
+ * @return array An array containing the exit code, and output from stdout/stderr
+ */
+function pexec(string $cmd, string $path, array $env = []) {
+    $desc = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w']
+    ];
+
+    //dbg('running {cmd} in {path}', [ 'cmd' => $cmd, 'path' => $path ]);
+
+    $proc = proc_open($cmd, $desc, $pipes, $path, $env);
+
+    if ($proc === false) {
+        //dbg('failed to execute command: {cmd}', [ 'cmd' => $cmd ]);
+        return;
+    }
+
+    $out = stream_get_contents($pipes[1]);
+    $err = stream_get_contents($pipes[2]);
+
+    return [
+        'rc' => proc_close($proc),
+        'out' => $out,
+        'err' => $err
+    ];
+}
+
+
+function penvfile(string $file): array {
+    $lines = file($file, FILE_SKIP_EMPTY_LINES|FILE_IGNORE_NEW_LINES);
+    $env = [];
+    while ($line = array_shift($lines)) {
+        if (strpos($line, '#') === 0) continue;
+        $pos = strpos($line, ' ');
+        $env[substr($line, 0, $pos)] = substr($line, $pos+1);
+    }
+    return $env;
+}
 
 
 function cmd_init(string $cwd): int {
@@ -545,6 +622,93 @@ function cmd_tag(string $cwd, string $tree, string $repo, array $args): int {
 }
 
 
+function cmd_push(string $cwd, string $tree, string $repo, array $args): int {
+    $usage = 'push [ --help | --project <project> ] <remote> [ --ref <tag|commit> ]';
+
+    list($opts, $args) = opts($args, 'help? project?: ref?:',
+        function () use ($usage) { return usage($usage); });
+
+    if (isset($opts['help']) || count($args) < 2) usage($usage);
+
+    $project = isset($opts['project']) ? $opts['project'] : 'default';
+    $projpath = projpath($repo, $project);
+
+    if (!projex($repo, $project)) eprojnotfound($project);
+
+    $remote = rmtget($repo, array_shift($args));
+
+    if (is_null($remote))
+        err(3, 'remote not found');
+
+    $files = [];
+
+    $commitId = 'latest';
+    if (isset($opts['ref'])) $commitId = $opts['ref'];
+
+    if (tagex($projpath, $commitId)) {
+        $files[tagpath($projpath, $commitId)] = 'text/plain';
+        $commitId = tagget($projpath, $commitId);
+    }
+
+    if (!objex($repo, $commitId))
+        err(3, 'commit not found: {c}', ['c'=>$commitId]);
+
+    $files[objfpath($repo, $commitId)] = 'text/plain';
+
+    $commit = comget(objget($repo, $commitId));
+    foreach ($commit as $file => $objid) {
+        $parts = explode('.', $file);
+        $ext = array_pop($parts);
+        $mime = 'text/plain';
+        switch ($ext) {
+            case 'css': $mime = 'text/css'; break;
+            case 'js': $mime = 'text/javascript'; break;
+        }
+        $files[objfpath($repo, $objid)] = $mime;
+    }
+
+    isset($remote['exec']) || err(4, 'undefined exec for remote');
+
+    if (isset($remote['env'])) {
+        file_exists($remote['env']) ||
+            err(3, 'env file not found: {f}', ['f'=>$remote['env']]);
+        $remote['env'] = penvfile($remote['env']);
+    } else {
+        $remote['env'] = [];
+    }
+
+    // reverse order so the tag/commit is uploaded last and ensure we
+    // don't overwrite a tag before all of it's dependent files are
+    // available
+    $files = array_reverse($files);
+
+    foreach ($files as $path => $mime) {
+        $relpath = relpath($repo, $path);
+
+        $tokens = array_merge($remote['env'], [
+            'DEPLOY_MIME' => $mime,
+            'DEPLOY_DEST' => path($remote['dest'], $relpath),
+            'DEPLOY_SRC' => $path
+        ]);
+ 
+        $search = array_map(function ($v) { return '{'.$v.'}'; }, array_keys($tokens));
+        $cmd = str_replace($search, array_values($tokens), $remote['exec']);
+        info('pushing {f}', ['f' => $relpath]);
+
+        $res = pexec($cmd, getcwd(), $remote['env']);
+
+        if ($res['rc'] !== 0)
+            err(4, 'failed to copy {f}: {m} ({c})', [
+                'f' => $relpath,
+                'm' => str_replace("\n", '_', $res['err']),
+                'c' => $res['rc']
+            ]);
+    }
+
+    return 0;
+}
+
+
 function cmd_gc(string $cwd, string $tree, string $repo, array $args): int {
     $objs = [];
     $refs = [];
@@ -609,6 +773,7 @@ function main() {
         case 'commit':
         case 'project':
         case 'tag':
+        case 'push':
         case 'gc':
             break;
         default:
@@ -644,6 +809,10 @@ usage: {$me} { init | add | status | commit | project | tag | gc }
     tag <project> [ <tag> <commit> | --delete <tag> ]
 
         Tag a commit within the specified project, or delete a tag
+
+    push [ --project <project> ] <remote> [ --ref <tag|commit> ]
+
+        Copy associated files to the remote.
 
     gc
 
