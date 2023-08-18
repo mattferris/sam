@@ -14,7 +14,7 @@
 function usage() {
     global $argv;
     echo <<<EOF
-usage: ${argv[0]} [options] <pack1> [ <packn> ]
+usage: {$argv[0]} [options] <pack1> [ <packn> ]
 
 SAM (Smart Asset Manager) helps assemble your web assets into packages. It
 expects one or more pack files to be specified.
@@ -597,18 +597,33 @@ function parse(string $pack) {
     $symbols = [];
 
     $outtmp = mktemp();
-    $cf = @fopen($outtmp, "w");
-    flock($cf, LOCK_EX);
+    $of = @fopen($outtmp, 'w');
+    flock($of, LOCK_EX);
 
     $paths = parsePack($pack, $options, $symbols, $postProcessors);
 
     foreach ($paths as $path) {
         info('asset {path}', [ 'path' => $path ]);
-        post_process($path, $cf, $postProcessors);
+        $if = @fopen($path, 'r');
+        flock($if, LOCK_SH);
+        while (!feof($if)) fwrite($of, fread($if, 4096));
+        flock($if, LOCK_UN);
+        fclose($if);
     }
 
-    flock($cf, LOCK_UN);
-    fclose($cf);
+    flock($of, LOCK_UN);
+    fclose($of);
+
+    $posttmp = "{$outtmp}.cmp";
+    $pf = @fopen($posttmp, 'w');
+    flock($pf, LOCK_EX);
+
+    post_process($outtmp, $pf, $postProcessors);
+
+    flock($pf, LOCK_UN);
+    fclose($pf);
+
+    unlink($outtmp);
 
     $target = $options['target'];
     foreach (array_merge($options, $symbols) as $k => $v) {
@@ -616,37 +631,37 @@ function parse(string $pack) {
     }
 
     debug(1, 'changing {path} to mode {mode}', [
-        'path' => $outtmp,
+        'path' => $posttmp,
         'mode' => $options['mode']
     ]);
-    if (@chmod($outtmp, intval($options['mode'], 8)) === false) {
-        error('failed to set file mode for {path}', [ 'path' => $outtmp ]);
+    if (@chmod($posttmp, intval($options['mode'], 8)) === false) {
+        error('failed to set file mode for {path}', [ 'path' => $posttmp ]);
         exit(1);
     }
 
     if (!is_null($options['owner'])) {
         debug(1, 'changing {path} to owner {owner}', [
-            'path' => $outtmp,
+            'path' => $posttmp,
             'owner' => $options['owner'],
         ]);
-        if (@chown($outtmp, $options['owner']) === false) {
-            error('failed to set owner for {path}', [ 'path' => $outtmp ]);
+        if (@chown($posttmp, $options['owner']) === false) {
+            error('failed to set owner for {path}', [ 'path' => $posttmp ]);
             exit(1);
         }
     }
 
     if (!is_null($options['group'])) {
         debug(1, 'changing {path} to group {group}', [
-            'path' => $outtmp,
+            'path' => $posttmp,
             'group' => $options['group']
         ]);
-        if (@chgrp($outtmp, $options['group']) === false) {
-            error('failed to set group for {path}', [ 'path' => $outtmp ]);
+        if (@chgrp($posttmp, $options['group']) === false) {
+            error('failed to set group for {path}', [ 'path' => $posttmp ]);
             exit(1);
         }
     }
 
-    rename($outtmp, $target);
+    rename($posttmp, $target);
 }
 
 
