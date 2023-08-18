@@ -404,21 +404,25 @@ function cmd_init(string $cwd): int {
 
     mkdir(path($base, 'projects'), 0750, true);
     mkdir(path($base, 'objects'), 0750, true);
+
+    projadd($repo, 'default') ||
+        err(2, 'failed to create project: {p}', ['p' => $project]);
+
     info('initialized deploy repo in {d}', ['d' => $cwd]);
     return 0;
 }
 
 
 function cmd_add(string $cwd, string $tree, string $repo, array $args): int {
-    $usage = 'add [ --help ] <project> <file>';
+    $usage = 'add [ --help | --project <project> ] <file>';
 
-    list($opts, $args) = opts($args, 'help?',
+    list($opts, $args) = opts($args, 'help? project?:',
         function () use ($usage) { usage($usage); });
 
     if (isset($opts['help'])) usage($usage);
 
     $store = path($repo, 'objects');
-    $project = array_shift($args);
+    $project = isset($opts['project']) ? $opts['project'] : 'default';
 
     if (!projex($repo, $project)) eprojnotfound($project);
 
@@ -482,10 +486,10 @@ function cmd_project(string $cwd, string $tree, string $repo, array $args): int 
 
 
 function cmd_status(string $cwd, string $tree, string $repo, array $args): int {
-    list($opts, $args) = opts($args, 'help?');
-    if(isset($opts['help']) || count($args) === 0) usage('status <project>');    
+    list($opts, $args) = opts($args, 'help? project?:');
+    if(isset($opts['help']) || count($args) === 0) usage('status [ --project <project> ]');    
 
-    $project = array_shift($args);
+    $project = isset($opts['project']) ? $opts['project'] : 'default';
 
     if (!projex($repo, $project)) eprojnotfound($project);
 
@@ -521,10 +525,10 @@ function cmd_status(string $cwd, string $tree, string $repo, array $args): int {
 
 
 function cmd_diff(string $cwd, string $tree, string $repo, array $args): int {
-    list($opts, $args) = opts($args, 'help?');
-    if (isset($opts['help']) || count($args) < 2) usage('diff <project> <file>');
+    list($opts, $args) = opts($args, 'help? project?:');
+    if (isset($opts['help']) || count($args) < 2) usage('diff [ --project <project> ] <file>');
 
-    $project = array_shift($args);
+    $project = isset($opts['project']) ? $opts['project'] : 'default';
     $file = array_shift($args);
     $relfile = relpath($tree, path($cwd, $file));
 
@@ -553,14 +557,14 @@ function cmd_diff(string $cwd, string $tree, string $repo, array $args): int {
 
 
 function cmd_commit(string $cwd, string $tree, string $repo, array $args): int {
-    $usage = 'commit [ --help | --discard ] <project>';
+    $usage = 'commit [ --help | --discard ] [ --project <project> ]';
 
     list($opts, $args) = opts($args, 'help? discard?:',
         function() use ($usage) { return usage($usage); });
 
     if (isset($opts['help']) || count($args) === 0) usage($usage);
 
-    $project = array_shift($args);
+    $project = isset($opts['project']) ? $opts['project'] : 'default';
 
     if (count($args) > 0)
         err(1, 'too many arguments');
@@ -593,14 +597,14 @@ function cmd_commit(string $cwd, string $tree, string $repo, array $args): int {
 
 
 function cmd_tag(string $cwd, string $tree, string $repo, array $args): int {
-    $usage = 'tag [ --help ] <project> [ <tag> <commit> | --delete <tag> ]';    
+    $usage = 'tag [ --help | --project <project> [ <tag> <commit> | --delete <tag> ]';    
 
-    list($opts, $args) = opts($args, 'help? delete?:',
+    list($opts, $args) = opts($args, 'help? project?: delete?:',
         function() use ($usage) { return usage($usage); });
 
     if (isset($opts['help']) || count($args) === 0) usage($usage);
 
-    $project = array_shift($args);
+    $project = isset($opts['project']) ? $opts['project'] : 'default';
     $projpath = projpath($repo, $project);
 
     if (!projex($repo, $project)) eprojnotfound($project);
@@ -785,19 +789,19 @@ usage: {$me} { init | add | status | commit | project | tag | gc }
 
         Initialize a project repo in this folder
 
-    add <project> <file1> [ <file2> ... ]
+    add [ --project <project> ] <file1> [ <file2> ... ]
 
         Stage assets to be commited to the specified project
 
-    status <project>
+    status [ --project <project> ]
 
         Check what files have been staged for the specified project
 
-    diff <project> <file>
+    diff [ --project <project> ] <file>
 
         Print the changes in a file since the last commit
 
-    commit <project> [ --discard | <tag1> ... ]
+    commit [ --project <project> ] [ --discard | <tag1> ... ]
 
         Commit the staged files for the specified project, and apply the
         specified tags
@@ -806,7 +810,7 @@ usage: {$me} { init | add | status | commit | project | tag | gc }
 
         List projects, create a new project, or delete a project
 
-    tag <project> [ <tag> <commit> | --delete <tag> ]
+    tag [ --project <project> ] [ <tag> <commit> | --delete <tag> ]
 
         Tag a commit within the specified project, or delete a tag
 
