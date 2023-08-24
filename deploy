@@ -405,7 +405,7 @@ function cmd_init(string $cwd): int {
     mkdir(path($base, 'projects'), 0750, true);
     mkdir(path($base, 'objects'), 0750, true);
 
-    projadd($repo, 'default') ||
+    projadd($base, 'default') ||
         err(2, 'failed to create project: {p}', ['p' => $project]);
 
     info('initialized deploy repo in {d}', ['d' => $cwd]);
@@ -422,7 +422,7 @@ function cmd_add(string $cwd, string $tree, string $repo, array $args): int {
     if (isset($opts['help'])) usage($usage);
 
     $store = path($repo, 'objects');
-    $project = isset($opts['project']) ? $opts['project'] : 'default';
+    $project = isset($opts['project']) ? $opts['project'][0] : 'default';
 
     if (!projex($repo, $project)) eprojnotfound($project);
 
@@ -487,9 +487,9 @@ function cmd_project(string $cwd, string $tree, string $repo, array $args): int 
 
 function cmd_status(string $cwd, string $tree, string $repo, array $args): int {
     list($opts, $args) = opts($args, 'help? project?:');
-    if(isset($opts['help']) || count($args) === 0) usage('status [ --project <project> ]');    
+    if(isset($opts['help'])) usage('status [ --project <project> ]');    
 
-    $project = isset($opts['project']) ? $opts['project'] : 'default';
+    $project = isset($opts['project']) ? $opts['project'][0] : 'default';
 
     if (!projex($repo, $project)) eprojnotfound($project);
 
@@ -528,7 +528,7 @@ function cmd_diff(string $cwd, string $tree, string $repo, array $args): int {
     list($opts, $args) = opts($args, 'help? project?:');
     if (isset($opts['help']) || count($args) < 2) usage('diff [ --project <project> ] <file>');
 
-    $project = isset($opts['project']) ? $opts['project'] : 'default';
+    $project = isset($opts['project']) ? $opts['project'][0] : 'default';
     $file = array_shift($args);
     $relfile = relpath($tree, path($cwd, $file));
 
@@ -559,12 +559,12 @@ function cmd_diff(string $cwd, string $tree, string $repo, array $args): int {
 function cmd_commit(string $cwd, string $tree, string $repo, array $args): int {
     $usage = 'commit [ --help | --discard ] [ --project <project> ]';
 
-    list($opts, $args) = opts($args, 'help? discard?:',
+    list($opts, $args) = opts($args, 'help? project?: discard?',
         function() use ($usage) { return usage($usage); });
 
-    if (isset($opts['help']) || count($args) === 0) usage($usage);
+    if (isset($opts['help'])) usage($usage);
 
-    $project = isset($opts['project']) ? $opts['project'] : 'default';
+    $project = isset($opts['project']) ? $opts['project'][0] : 'default';
 
     if (count($args) > 0)
         err(1, 'too many arguments');
@@ -602,12 +602,13 @@ function cmd_tag(string $cwd, string $tree, string $repo, array $args): int {
     list($opts, $args) = opts($args, 'help? project?: delete?:',
         function() use ($usage) { return usage($usage); });
 
-    if (isset($opts['help']) || count($args) === 0) usage($usage);
+    if (isset($opts['help'])) usage($usage);
 
-    $project = isset($opts['project']) ? $opts['project'] : 'default';
+    $project = isset($opts['project']) ? $opts['project'][0] : 'default';
     $projpath = projpath($repo, $project);
 
-    if (!projex($repo, $project)) eprojnotfound($project);
+    projex($repo, $project) ||
+        eprojnotfound($project);
 
     if (isset($opts['delete'])) {
         $name = $opts['delete'][0];
@@ -617,6 +618,15 @@ function cmd_tag(string $cwd, string $tree, string $repo, array $args): int {
 
         tagrm($projpath, $name) ||
             err(3, 'failed to remove tag');
+    }
+    elseif (count($args) === 2) {
+        $tag = array_shift($args);
+        $commitId = array_shift($args);
+ 
+        objex($repo, $commitId) ||
+            err(3, 'commit not found');
+
+        tagput($projpath, $tag, $commitId);
     }
     else {
         array_map(function ($t) use ($projpath) { printf("%s -> %s\n", $t, tagget($projpath, $t)); }, lsdir(path($projpath, 'tags')));
@@ -632,12 +642,13 @@ function cmd_push(string $cwd, string $tree, string $repo, array $args): int {
     list($opts, $args) = opts($args, 'help? project?: ref?:',
         function () use ($usage) { return usage($usage); });
 
-    if (isset($opts['help']) || count($args) < 2) usage($usage);
+    if (isset($opts['help']) || count($args) < 1) usage($usage);
 
-    $project = isset($opts['project']) ? $opts['project'] : 'default';
+    $project = isset($opts['project']) ? $opts['project'][0] : 'default';
     $projpath = projpath($repo, $project);
 
-    if (!projex($repo, $project)) eprojnotfound($project);
+    projex($repo, $project) ||
+        eprojnotfound($project);
 
     $remote = rmtget($repo, array_shift($args));
 
@@ -647,7 +658,7 @@ function cmd_push(string $cwd, string $tree, string $repo, array $args): int {
     $files = [];
 
     $commitId = 'latest';
-    if (isset($opts['ref'])) $commitId = $opts['ref'];
+    if (isset($opts['ref'])) $commitId = $opts['ref'][0];
 
     if (tagex($projpath, $commitId)) {
         $files[tagpath($projpath, $commitId)] = 'text/plain';
@@ -667,6 +678,12 @@ function cmd_push(string $cwd, string $tree, string $repo, array $args): int {
         switch ($ext) {
             case 'css': $mime = 'text/css'; break;
             case 'js': $mime = 'text/javascript'; break;
+            case 'txt': $mime = 'text/plain'; break;
+            case 'html': $mime = 'text/html'; break;
+            case 'png': $mime = 'image/png'; break;
+            case 'gif': $mime = 'image/gif'; break;
+            case 'jpg': $mime = 'image/jpeg'; break;
+            case 'svg': $mime = 'image/svg+xml'; break;
         }
         $files[objfpath($repo, $objid)] = $mime;
     }
@@ -751,9 +768,8 @@ function cmd_gc(string $cwd, string $tree, string $repo, array $args): int {
     /*
      * Delete objects that are no longer referenced
      */
-    while ($id = array_key_first($objs)) {
+    foreach ($objs as $id => $val) {
         if (!isset($refs[$id])) objdel($repo, $id);
-        array_shift($objs);
     }
 
     return 0;
