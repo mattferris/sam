@@ -455,7 +455,7 @@ function cmd_add(string $cwd, string $tree, string $repo, array $args, string $c
 }
 
 
-function cmd_project(string $cwd, string $tree, string $repo, array $args): int {
+function cmd_project(string $cwd, string $tree, string $repo, array $args, string $curproj): int {
     $usage = 'project [ --help | --delete <project> | --add <project> | --use <project> ]';
 
     list($opts, $args) = opts($args, 'help? delete?: add?: use?:',
@@ -495,7 +495,11 @@ function cmd_project(string $cwd, string $tree, string $repo, array $args): int 
 
     } else {
 
-        array_map(function ($p) { printf("%s\n", $p); }, lsdir(path($repo, 'projects')));
+        array_map(function ($p) use ($curproj) {
+            $cur = ' ';
+            if ($curproj === $p) $cur = '*';
+            printf("%s %s\n", $cur, $p);
+        }, lsdir(path($repo, 'projects')));
 
     }
 
