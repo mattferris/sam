@@ -269,6 +269,19 @@ info: committed as c04e858b003cefb5642903f0495f70f6c17de25e
 latest -> c04e858b003cefb5642903f0495f70f6c17de25e
 ```
 
+To avoid having to specify the project for each command, you can specify the
+default project to use.
+
+```
+# deploy project
+* default
+  main
+# deploy project --use main
+# deploy project
+  default
+* main
+```
+
 In order to publish the versioned assets, simply copy the `.deploy` folder to
 a web accessible location.
 
@@ -314,7 +327,7 @@ Each line defined a name and value pair, separated by a space.
 One defined, you can use the `push` command to deploy your assets automatically.
 
 ```
-# deploy push --project main ovh
+# deploy push ovh
 info: pushing objects/d7/d76009f3e8533dcee64ea80fd671ba665b4cfb82
 info: pushing objects/c8/c8f9738701a05e1ed83aac8e958798c2524eee2d
 info: pushing objects/96/969efc7579f3b515a419c739d701d3fdb766336d
@@ -327,6 +340,18 @@ each deployment is atomic. Tags will not be deployed until the entire commit
 has been deployed first. Without this consideration, a tag would reference a
 commit that doesn't exist, or assets that are still in the process of being
 deployed.
+
+By default, deploy will only push the changes since the last commit. It's
+possible to push all the objects using the `--full` option. The `--diff` option
+specifies what tag/commit to base the changes from. The `--ref` option specifies
+what tag/commit to push.
+
+```
+# deploy push --full ovh
+...
+# deploy push --ref v2.1 --diff v2.0 ovh
+...
+```
 
 ### How to reference a versioned asset
 
