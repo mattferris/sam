@@ -163,6 +163,16 @@ function objex(string $repo, string $id): bool {
 }
 
 
+function objcpy(string $repo, string $cpypath): ?string {
+    if (!file_exists($cpypath)) return null;
+    $id = sha1_file($cpypath);
+    $path = objfpath($repo, $id);
+    if (!is_dir(dirname($path))) mkdir(dirname($path));
+    if (objex($repo, $id) || copy($cpypath, $path)) return $id;
+    return null;
+}
+
+
 function objput(string $repo, array $data): ?string {
     $data = implode("\n", $data);
     $id = objid($data);
@@ -433,7 +443,7 @@ function cmd_add(string $cwd, string $tree, string $repo, array $args): int {
 
     $cur = mapk($args,
         function (string $file) use ($cwd, $tree, $repo) {
-            $id = objput($repo, read(path($cwd, $file)));
+            $id = objcpy($repo, path($cwd, $file));
             if (is_null($id))
                 warn('failed to add file: {f}', ['f' => $file]);
             return [ relpath($tree, path($cwd, $file)), $id ];
