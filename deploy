@@ -224,8 +224,7 @@ function idxex(string $repo, string $project): bool {
 function idxput(string $repo, string $project, array $commits): bool {
     return file_put_contents(
         path(projpath($repo, $project), 'index'),
-        implode("\n", $commits)."\n",
-        FILE_APPEND);
+        implode("\n", $commits)."\n");
 }
 
 
