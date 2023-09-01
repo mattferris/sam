@@ -394,3 +394,51 @@ page.css f1886a5a91998d12ca99e7fb1f1bb06143d89d5b
 ```
 
 Ideally, the result would be cached for a certain amount of time.
+
+### Garbage Collection
+
+Over time, a repository come to hold more and more orphaned objects. These are
+objects that are no longer referenced by any tags, and are therefore, no longer
+needed. Periodically pruning these objects will reduce the amount of space the
+repository consumes on disk. deploy includes a garbage collection command called
+`gc` which automatically prunes orphaned objects.
+
+```
+# deploy gc
+info: pruning object d25f87bf6a63b42b65bcaf1d7b444dead64e07e0
+info: pruning object d43bd43d21df66c9b678eec9dee3b113212a29b4
+info: pruning object de06f5317fa199730c7c0dbc8e0586443c1a9cd0
+info: pruned 3 objects, 4672917 bytes reclaimed
+```
+
+Deploy assets (essentially, a remote repository) will also experience a growing
+number of orphaned objects over time. This same command can be run on the remote
+repository as well.
+
+```
+web-server# SAM_TREE_DIR= SAM_REPO_DIR=/var/www/assets deploy gc
+info: pruning object bd62ccf770ad138a4c29ca9e6e82c594075f707a
+info: pruning object f1810e6f1cbefbe510c377807818c968533028d8
+info: pruning object 174041ba1866b80aadc546a6a76116dbfc28aaea
+info: pruning object 176d04e5de45a478821f2907a2d2fa4b90a083bc
+info: pruning object 17ccd19fe28c5b8dba6dcce0d69faa6382f2515b
+info: pruning object 17cd913ffd517133d60cf75d18cb7b7accdeb38d
+info: pruning object 54ea8825de874a9486adbb6a713d123402680f95
+info: pruning object 921c444d4aae1796b66e8df83384416a9a9f86a8
+info: pruning object 92eabe228991742958bc7f1368f80e9f39619316
+info: pruning object e226dd4cc024b903277dd31e8019375a60faa40a
+info: pruned 10 objects, 2750734 bytes reclaimed
+```
+
+deploy expects to be run in a working tree. In the above example, the environment
+variables `SAM_TREE_DIR` and `SAM_REPO_DIR` are set so deploy doesn't attempt to
+traverse the filesystem looking for a repository stored in `.deploy`. This allows
+deploy to run on "bare" repository that has no working tree.
+
+In cases where object storage is used, you may need to mount the container using
+a command like `rclone` first.
+
+```
+# rclone mount ovh:container /mnt
+# SAM_TREE_DIR= SAM_REPO_DIR=/mnt/assets
+```
