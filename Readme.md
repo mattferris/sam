@@ -257,17 +257,20 @@ info: created project main
 As with git, `deploy` uses a workflow that involves staging a number of files,
 then commiting them. Each commit is identified by an ID (a SHA1 hash). When a
 commit is created, two tags are automatically created which refer to the commit:
-`latest` which always refers to the last commit, and a timestamp of when the
-commit was created (e.g. `2023.05.29-16:30:20`).
+`latest` which always refers to the last commit, and `previous` which always
+refers to the second last commit (if available).
 
 ```
 # deploy add --project main foo.css
 # deploy commit main
 info: committed as c04e858b003cefb5642903f0495f70f6c17de25e
 # deploy tag --project main
-2023.05.29-16:30:20 -> c04e858b003cefb5642903f0495f70f6c17de25e
 latest -> c04e858b003cefb5642903f0495f70f6c17de25e
 ```
+
+As `latest` and `previous` are transient tags, it is discouraged to rely on them
+in production settings. Instead, additional tagging schemes should be used to
+create more permanent references to specific commits.
 
 To avoid having to specify the project for each command, you can specify the
 default project to use.
@@ -398,7 +401,7 @@ Ideally, the result would be cached for a certain amount of time.
 ### Garbage Collection
 
 Over time, a repository come to hold more and more orphaned objects. These are
-objects that are no longer referenced by any tags, and are therefore, no longer
+objects that are no longer referenced by any tags, and are therefore no longer
 needed. Periodically pruning these objects will reduce the amount of space the
 repository consumes on disk. deploy includes a garbage collection command called
 `gc` which automatically prunes orphaned objects.
@@ -411,7 +414,7 @@ info: pruning object de06f5317fa199730c7c0dbc8e0586443c1a9cd0
 info: pruned 3 objects, 4672917 bytes reclaimed
 ```
 
-Deploy assets (essentially, a remote repository) will also experience a growing
+Deployed assets (essentially, a remote repository) will also experience a growing
 number of orphaned objects over time. This same command can be run on the remote
 repository as well.
 

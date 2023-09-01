@@ -689,10 +689,6 @@ function cmd_commit(string $cwd, string $tree, string $repo, array $args, string
         tagput($projpath, 'latest', $id) ||
             err(3, 'failed to create tag "latest"');
 
-        $datetag = (new Datetime())->format('Y.m.d-H:i:s');
-        tagput($projpath, $datetag, $id) ||
-            err(3, 'failed to create tag "'.$datetag.'"');
-
         if (!is_null($prev))
             tagput($projpath, 'previous', $prev) ||
                 err(3, 'failed to create tag "previous"');
