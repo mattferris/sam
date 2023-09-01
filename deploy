@@ -676,6 +676,9 @@ function cmd_commit(string $cwd, string $tree, string $repo, array $args, string
 
     if (!projex($repo, $project)) eprojnotfound($project);
 
+    idxex($repo, $project) ||
+        err(3, 'nothing to {c}', ['c' => isset($opts['discard']) ? 'discard' : 'commit']);
+
     if (!isset($opts['discard'])) {
         $projpath = projpath($repo, $project);
 
