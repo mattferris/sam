@@ -913,9 +913,18 @@ function cmd_gc(string $cwd, string $tree, string $repo, array $args): int {
     /*
      * Delete objects that are no longer referenced
      */
+    $objc = 0;
+    $size = 0;
     foreach ($objs as $id => $val) {
-        if (!isset($refs[$id])) objdel($repo, $id);
+        if (!isset($refs[$id])) {
+            $size += filesize(objfpath($repo, $id));
+            objdel($repo, $id);
+            info('pruning object {o}', ['o'=>$id]);
+            $objc++;
+        }
     }
+
+    info('pruned {n} objects, {b} bytes reclaimed', ['n'=>$objc, 'b'=>$size]);
 
     return 0;
 }
@@ -926,11 +935,18 @@ function main() {
     global $argv;
     $args = $argv;
     $cwd = getcwd();
-    $tree = findroot($cwd);
-    $repo = path($tree, '.deploy');
     $me = array_shift($args);
     $cmd = array_shift($args);
-    $curproj = file_exists(path($repo, 'current')) ? file_get_contents(path($repo, 'current')) : 'default';
+
+    $env = getenv();
+
+    if (isset($env['SAM_TREE_DIR'])) $tree = $env['SAM_TREE_DIR'];
+    if (isset($env['SAM_REPO_DIR'])) $repo = $env['SAM_REPO_DIR'];
+    if (isset($env['SAM_PROJECT'])) $curproj = $env['SAM_PROJECT'];
+
+    if (!isset($tree)) $tree = findroot($cwd);
+    if (!isset($repo)) $repo = path($tree, '.deploy');
+    if (!isset($curproj)) $curproj = file_exists(path($repo, 'current')) ? file_get_contents(path($repo, 'current')) : 'default';
 
     switch ($cmd) {
         case 'init':
