@@ -9,8 +9,11 @@ const DEPLOY_OPT_BADARGCOUNT = 2;
 function kmap(array $data, callable $fn): array {
     $result = [];
     $keys = array_keys($data);
-    while ($k = array_shift($keys))
-        $result[] = $fn($k, $data[$k]);
+    while ($k = array_shift($keys)) {
+        $v = $fn($k, $data[$k]);
+        if (is_null($v)) continue;
+        $result[] = $v;
+    }
     return $result;
 }
 
@@ -20,6 +23,7 @@ function mapk(array $data, callable $fn): array {
     $result = [];
     while ($d = array_shift($data)) {
         list($k, $v) = $fn($d);
+        if (is_null($k)) continue;
         $result[$k] = $v;
     }
     return $result;
@@ -32,6 +36,7 @@ function kmapk(callable $fn, array $data): array {
     $keys = array_keys($data);
     while ($k = array_shift($keys)) {
         list($k, $v) = $fn($k, $data[$k]);
+        if (is_null($k)) continue;
         $result[$k] = $v;
     }
     return $result;
@@ -478,15 +483,20 @@ function cmd_add(string $cwd, string $tree, string $repo, array $args, string $c
 
     $store = path($repo, 'objects');
     $project = isset($opts['project']) ? $opts['project'][0] : $curproj;
+    $projpath = projpath($repo, $project);
 
     if (!projex($repo, $project)) eprojnotfound($project);
 
-    $last = comcur(projpath($repo, $project));
-    $prev = [];
-    if (!is_null($last))
-        $prev = comget(objget($repo, $last));
+    $idx = [];
 
-    $cur = mapk($args,
+    if (idxex($repo, $project)) {
+        $idx = comget(idxget($repo, $project));
+    } else {
+        $last = comcur($projpath);
+        $idx = !is_null($last) ? comget(objget($repo, $last)) : [];
+    }
+
+    $new = mapk($args,
         function (string $file) use ($cwd, $tree, $repo) {
             $id = objcpy($repo, path($cwd, $file));
             if (is_null($id))
@@ -494,8 +504,41 @@ function cmd_add(string $cwd, string $tree, string $repo, array $args, string $c
             return [ relpath($tree, path($cwd, $file)), $id ];
         });
 
-    idxput($repo, $project, kmap(array_merge($prev, $cur),
-        function ($k, $v) { return sprintf("%s %s", $k, $v); }));
+    idxput($repo, $project, comput(array_merge($idx, $new)));
+
+    return 0;
+}
+
+
+// remove file(s) from a project's index
+function cmd_rm(string $cwd, string $tree, string $repo, array $args, string $curproj): int {
+    $usage = 'rm [ --help | --project <project> ] <file>';
+
+    list($opts, $args) = opts($args, 'help? project?:',
+        function () use ($usage) { usage($usage); });
+
+    if (isset($opts['help'])) usage($usage);
+
+    $store = path($repo, 'objects');
+    $project = isset($opts['project']) ? $opts['project'][0] : $curproj;
+    $file = relpath($tree, path($cwd, array_shift($args)));
+
+    if (!projex($repo, $project)) eprojnotfound($project);
+
+    $last = comcur(projpath($repo, $project));
+
+    if (is_null($last) && is_null($idx))
+        err(3, 'nothing to remove, no files currently tracked');
+
+    $tracked = idxex($repo, $project) ? comget(idxget($repo, $project)) : comget(objget($repo, $last));
+
+    $tracked = kmap($tracked,
+        function (string $tfile, string $id) use ($file) {
+            if ($tfile === $file) return;
+            return sprintf("%s %s" ,$tfile, $id);
+        });
+
+    idxput($repo, $project, $tracked);
 
     return 0;
 }
@@ -563,33 +606,23 @@ function cmd_status(string $cwd, string $tree, string $repo, array $args, string
 
     if (!projex($repo, $project)) eprojnotfound($project);
 
-    // if no index, then nothing to report, so return
-    if (!idxex($repo, $project)) return 0;
-
     $last = comcur(projpath($repo, $project));
     $current = !is_null($last) && objex($repo, $last) ? comget(objget($repo, $last)) : [];
-    $index = comget(idxget($repo, $project));
+    $index = idxex($repo, $project) ? comget(idxget($repo, $project)) : comget(objget($repo, $last));
 
-    $new = $mod = [];
-    while (list($file, $id) = shiftk($index))
-        if (!isset($current[$file])) $new[$file] = $id;
-        elseif ($current[$file] !== $id) $mod[$file] = $id;
-        else unset($current[$file]);
+    $listing = [];
+    while (list($file, $id) = shiftk($index)) {
+        if (!isset($current[$file])) $listing[$file] = '+';
+        elseif ($current[$file] !== $id) $listing[$file] = '*';
+        else $listing[$file] = ' ';
+        if (isset($current[$file])) unset($current[$file]);
+    }
 
-    $del = $current;
+    foreach ($current as $file => $id) $listing[$file] = '-';
+    ksort($listing);
 
-    if (count($new) > 0)
-        foreach (array_keys($new) as $file)
-            printf("  + %s\n", $file);
-
-    elseif (count($mod) > 0)
-        foreach (array_keys($mod) as $file)
-            printf("  * %s\n", $file);
-
-    elseif (count($del) > 0)
-        foreach (array_keys($del) as $file)
-            printf("  - %s\n", $file);
-
+    foreach ($listing as $k => $f) printf("  %s %s\n", $f, $k);
+    
     return 0;
 }
 
@@ -597,7 +630,7 @@ function cmd_status(string $cwd, string $tree, string $repo, array $args, string
 // show difference between a file in the working tree it's last change
 function cmd_diff(string $cwd, string $tree, string $repo, array $args, string $curproj): int {
     list($opts, $args) = opts($args, 'help? project?:');
-    if (isset($opts['help']) || count($args) < 2) usage('diff [ --project <project> ] <file>');
+    if (isset($opts['help']) || count($args) < 1) usage('diff [ --project <project> ] <file>');
 
     $project = isset($opts['project']) ? $opts['project'][0] : $curproj;
     $file = array_shift($args);
@@ -617,7 +650,7 @@ function cmd_diff(string $cwd, string $tree, string $repo, array $args, string $
     }
 
     $retcode = 0;
-    passthru(sprintf("diff -u %s %s",
+    passthru(sprintf("diff -u --color=always %s %s",
         objfpath($repo, $current[$relfile]), escapeshellarg($file)), $retcode);
 
     if ($retcode > 1)
@@ -902,6 +935,7 @@ function main() {
     switch ($cmd) {
         case 'init':
         case 'add':
+        case 'rm':
         case 'status':
         case 'diff':
         case 'commit':
@@ -922,6 +956,10 @@ usage: {$me} { init | add | status | commit | project | tag | gc }
     add [ --project <project> ] <file1> [ <file2> ... ]
 
         Stage assets to be commited to the specified project
+
+    rm [ --project <project> ] <file>
+
+        Unstage an asset for the next commit
 
     status [ --project <project> ]
 
