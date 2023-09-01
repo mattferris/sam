@@ -45,11 +45,13 @@ function shiftk(array &$arr): ?array {
 }
 
 
+// create a file path from the provided arguments
 function path(...$parts): string {
     return implode(DIRECTORY_SEPARATOR, $parts);
 }
 
 
+// find the repository parent directory
 function findroot(string $cwd): ?string {
     $parts = explode(DIRECTORY_SEPARATOR, $cwd);
     while (count($parts) > 0) {
@@ -61,12 +63,14 @@ function findroot(string $cwd): ?string {
 }
 
 
+// create a relative path from the repo root
 function relpath(string $tree, string $path): ?string {
     $tree = rtrim($tree, '/');
     return strpos($path, $tree) === 0 ? substr($path, strlen($tree) + 1) : null;
 }
 
 
+// parse the provided option specification
 function optspec(string $spec): ?array {
     $opts = [];
     foreach (explode(' ', $spec) as $opt) {
@@ -79,6 +83,7 @@ function optspec(string $spec): ?array {
 }
 
 
+// evaluate the command line arguments using a provide option specification
 function opts(array $inargs, string $optstr, callable $failed = null): array {
     $failed = $failed ?: function () {};
     $outopts = [];
@@ -115,6 +120,7 @@ function opts(array $inargs, string $optstr, callable $failed = null): array {
 }
 
 
+// return an array of files for the given directory
 function lsdir(string $dir, bool $hidden = false): ?array {
     $files = [];
     if (!file_exists($dir)) return null;
@@ -129,6 +135,7 @@ function lsdir(string $dir, bool $hidden = false): ?array {
 }
 
 
+// delete a directory
 function rrmdir(string $dir): bool {
     foreach (lsdir($dir, true) as $e)
         $ep = path($dir, $e);
@@ -138,31 +145,37 @@ function rrmdir(string $dir): bool {
 }
 
 
+// read a file into an array where each array element contains a line
 function read(string $file): ?array {
     return file_exists($file) ? file($file, FILE_IGNORE_NEW_LINES) : null;
 }
 
 
+// return an object ID based on provided data
 function objid(string $data): ?string {
     return sha1($data);
 }
 
 
+// return the prefix/objid for an object
 function objpath(string $id): string {
     return path(substr($id, 0, 2), $id);
 }
 
 
+// return the full path to an object
 function objfpath(string $repo, string $id): string {
     return path($repo, 'objects', objpath($id));
 }
 
 
+// test whether an object exists
 function objex(string $repo, string $id): bool {
     return file_exists(objfpath($repo, $id));
 }
 
 
+// create an object by copying a file into the object pool (binary safe)
 function objcpy(string $repo, string $cpypath): ?string {
     if (!file_exists($cpypath)) return null;
     $id = sha1_file($cpypath);
@@ -173,6 +186,7 @@ function objcpy(string $repo, string $cpypath): ?string {
 }
 
 
+// create an object by writing the passed data into the object pool (not binary safe)
 function objput(string $repo, array $data): ?string {
     $data = implode("\n", $data);
     $id = objid($data);
@@ -183,6 +197,7 @@ function objput(string $repo, array $data): ?string {
 }
 
 
+// return the contents of an object (not binary safe)
 function objget(string $repo, string $id): ?array {
     $obj = file(objfpath($repo, $id));
     if ($obj !== false) return $obj;
@@ -190,86 +205,102 @@ function objget(string $repo, string $id): ?array {
 }
 
 
+// delete the specified object from the object pool
 function objdel(string $repo, string $id): bool {
     $path = objfpath($repo, $id);
     return file_exists($path) && unlink($path);
 }
 
 
+// return the path to a project directory in the repo
 function projpath(string $repo, string $name): string {
     return path($repo, 'projects', $name);
 }
 
 
+// test if a project exists
 function projex(string $repo, string $name): bool {
     return file_exists(projpath($repo, $name));
 }
 
 
+// add a project to the repo
 function projadd(string $repo, string $name): bool {
     return mkdir(projpath($repo, $name));
 }
 
 
+// delete a project from the repo
 function projdel(string $repo, string $name): bool {
     return rrmdir(projpath($repo, $name));
 }
 
 
+// test if an index exists
 function idxex(string $repo, string $project): bool {
     return file_exists(path(projpath($repo, $project), 'index'));
 }
 
 
-function idxput(string $repo, string $project, array $commits): bool {
+// write a new index using the provided data
+function idxput(string $repo, string $project, array $tracked): bool {
     return file_put_contents(
         path(projpath($repo, $project), 'index'),
-        implode("\n", $commits)."\n");
+        implode("\n", $tracked)."\n");
 }
 
 
+// get the contents of an index
 function idxget(string $repo, string $project): ?array {
     $path = path(projpath($repo, $project), 'index');
     return read($path);
 }
 
 
+// remove an index
 function idxrm(string $repo, string $project): bool {
     $path = path(projpath($repo, $project), 'index');
     return file_exists($path) ? unlink($path) : false;
 }
 
 
+// get the current commit for a project
 function comcur(string $projpath): ?string {
     return tagget($projpath, 'latest');
 }
 
 
+// return a string representation of a commit
 function comput(array $lines): array {
-    return kmap($lines, function ($k, $v) { return "$k $v\n"; });
+    return kmap($lines, function ($k, $v) { return "$k $v"; });
 }
 
 
+// return a parsed representation of a commit
 function comget(array $lines): array {
     return mapk($lines, function ($l) { return explode(' ', rtrim($l, "\n")); });
 }
 
 
+// return the path for a tag
 function tagpath(string $projpath, string $name): string {
     return path($projpath, 'tags', $name);
 }
 
 
+// test if a tag exists
 function tagex(string $projpath, string $name): bool {
     return file_exists(tagpath($projpath, $name));
 }
 
 
+// get the contents of a tag
 function tagget(string $projpath, string $name): ?string {
     return tagex($projpath, $name) ? file_get_contents(tagpath($projpath, $name)) : null;
 }
 
 
+// write/overwrite a tag
 function tagput(string $projpath, string $name, string $commit): bool {
     $tagpath = tagpath($projpath, $name);
     if (!is_dir(dirname($tagpath))) mkdir(dirname($tagpath), 0750, true);
@@ -277,22 +308,26 @@ function tagput(string $projpath, string $name, string $commit): bool {
 }
 
 
+// remote a tag
 function tagrm(string $projpath, string $name): bool {
     $path = tagpath($projpath, $name);
     return file_exists($path) ? unlink($path) : false;
 }
 
 
+// return the path to a remote
 function rmtpath(string $repo, string $name): string {
     return path($repo, 'remotes', $name);
 }
 
 
+// test if a remote exists
 function rmtex(string $repo, string $name): bool {
     return file_exists(rmtpath($repo, $name));
 }
 
 
+// get the contents of a remote
 function rmtget(string $repo, string $name): ?array {
     if (!rmtex($repo, $name)) return null;
     $data = file(rmtpath($repo, $name), FILE_SKIP_EMPTY_LINES|FILE_IGNORE_NEW_LINES);
@@ -308,12 +343,14 @@ function rmtget(string $repo, string $name): ?array {
 }
 
 
+// increment the refcount of an object
 function refcnt(array &$refcnt, string $id) {
     if (!isset($refcnt[$id])) $refcnt[$id] = 0;
     $refcnt[$id]++;
 }
 
 
+// log a message to stdout
 function logger(string $msg, array $data = []) {
     if (count($data) > 0) {
         $keys = array_keys($data);
@@ -325,27 +362,32 @@ function logger(string $msg, array $data = []) {
 }
 
 
+// log an error
 function err(int $code, string $msg, array $data = []) {
     logger("error: $msg", $data);
     exit($code);
 }
 
 
+// log a warning
 function warn(string $msg, array $data = []) {
     return logger("warning: $msg", $data);
 }
 
 
+// log information
 function info(string $msg, array $data = []) {
     return logger("info: $msg", $data);
 }
 
 
+// log a debug message
 function dbg(string $msg, array $data = []) {
     return logger("debug: $msg", $data);
 }
 
 
+// print usage information
 function usage(string $msg, array $data = []) {
     global $argv;
     logger("usage: {$argv[0]} $msg", $data);
@@ -353,6 +395,7 @@ function usage(string $msg, array $data = []) {
 }
 
 
+// return a project not found error
 function eprojnotfound(string $project) {
     err(2, 'project not found: {p}', ['p' => $project]);
 }
@@ -393,6 +436,7 @@ function pexec(string $cmd, string $path, array $env = []) {
 }
 
 
+// parse an environment file
 function penvfile(string $file): array {
     $lines = file($file, FILE_SKIP_EMPTY_LINES|FILE_IGNORE_NEW_LINES);
     $env = [];
@@ -405,6 +449,7 @@ function penvfile(string $file): array {
 }
 
 
+// init a repo
 function cmd_init(string $cwd): int {
     $base = path($cwd, '.deploy');
 
@@ -422,6 +467,7 @@ function cmd_init(string $cwd): int {
 }
 
 
+// add file(s) to a project's index
 function cmd_add(string $cwd, string $tree, string $repo, array $args, string $curproj): int {
     $usage = 'add [ --help | --project <project> ] <file>';
 
@@ -455,6 +501,7 @@ function cmd_add(string $cwd, string $tree, string $repo, array $args, string $c
 }
 
 
+// list, add, remove projects, or set the default project
 function cmd_project(string $cwd, string $tree, string $repo, array $args, string $curproj): int {
     $usage = 'project [ --help | --delete <project> | --add <project> | --use <project> ]';
 
@@ -507,6 +554,7 @@ function cmd_project(string $cwd, string $tree, string $repo, array $args, strin
 }
 
 
+// print the status of the index
 function cmd_status(string $cwd, string $tree, string $repo, array $args, string $curproj): int {
     list($opts, $args) = opts($args, 'help? project?:');
     if(isset($opts['help'])) usage('status [ --project <project> ]');    
@@ -546,6 +594,7 @@ function cmd_status(string $cwd, string $tree, string $repo, array $args, string
 }
 
 
+// show difference between a file in the working tree it's last change
 function cmd_diff(string $cwd, string $tree, string $repo, array $args, string $curproj): int {
     list($opts, $args) = opts($args, 'help? project?:');
     if (isset($opts['help']) || count($args) < 2) usage('diff [ --project <project> ] <file>');
@@ -578,6 +627,7 @@ function cmd_diff(string $cwd, string $tree, string $repo, array $args, string $
 }
 
 
+// commit an index
 function cmd_commit(string $cwd, string $tree, string $repo, array $args, string $curproj): int {
     $usage = 'commit [ --help | --discard ] [ --project <project> ]';
 
@@ -624,6 +674,7 @@ function cmd_commit(string $cwd, string $tree, string $repo, array $args, string
 }
 
 
+// create, list, or delete tags
 function cmd_tag(string $cwd, string $tree, string $repo, array $args, string $curproj): int {
     $usage = 'tag [ --help | --project <project> [ <tag>  [ <commit> ] | --delete <tag> ]';    
 
@@ -671,6 +722,7 @@ function cmd_tag(string $cwd, string $tree, string $repo, array $args, string $c
 }
 
 
+// push a commit to a remote
 function cmd_push(string $cwd, string $tree, string $repo, array $args, string $curproj): int {
     $usage = 'push [ --help | --project <project> ] [ --ref <tag|commit> ] [ --full | --diff <tag|commit> ] <remote>';
 
@@ -789,6 +841,7 @@ function cmd_push(string $cwd, string $tree, string $repo, array $args, string $
 }
 
 
+// prune the object store, removing unreferenced objects
 function cmd_gc(string $cwd, string $tree, string $repo, array $args): int {
     $objs = [];
     $refs = [];
@@ -835,6 +888,7 @@ function cmd_gc(string $cwd, string $tree, string $repo, array $args): int {
 }
 
 
+// attempt to perform the specified user action
 function main() {
     global $argv;
     $args = $argv;
