@@ -25,7 +25,7 @@ reset.css
 Run sam to package the assets.
 
 ```
-# ./sam assets.pack
+# sam pack assets.pack
 # ls assets.pack.out
 assets.pack.out
 ```
@@ -228,19 +228,19 @@ import common.pack
 Versioned asset deployment
 --------------------------
 
-Sam includes a utility to assist with bundling assets for versioned deployment
-creatively called `deploy`. `deploy` will create a file structure that is able
-to be referenced by a *tag*. The *tag* will resolve to a file list, from which
-the ultimate asset URL will be resolveable.
+Sam includes a features to assist with bundling assets for versioned deployment.
+These features allow you to create a file structure that is able to be
+referenced by a *tag*. The *tag* will resolve to a file list, from which the
+ultimate asset URL will be resolveable.
 
-`deploy` tracks versions in a similar manner to git. All versioned assets are
+`sam` tracks versions in a similar manner to git. All versioned assets are
 stored in a *repository* stored under `.deploy`. The repository must first be
 initialized, which should be completed from the root folder of your asset
 collections.
 
 ```
 # cd assets
-# deploy init
+# sam init
 info: initialized deploy repo in ~user/assets
 ```
 
@@ -250,21 +250,21 @@ independent of each other. Projects can be added and removed as necessary. When
 a repository is initialized, a `default` project is created automatically.
 
 ```
-# deploy project --add main
+# sam project --add main
 info: created project main
 ```
 
-As with git, `deploy` uses a workflow that involves staging a number of files,
-then commiting them. Each commit is identified by an ID (a SHA1 hash). When a
-commit is created, two tags are automatically created which refer to the commit:
+As with git, `sam` uses a workflow that involves staging a number of files, then
+commiting them. Each commit is identified by an ID (a SHA1 hash). When a commit
+is created, two tags are automatically created which refer to the commit:
 `latest` which always refers to the last commit, and `previous` which always
 refers to the second last commit (if available).
 
 ```
-# deploy add --project main foo.css
-# deploy commit main
+# sam add --project main foo.css
+# sam commit main
 info: committed as c04e858b003cefb5642903f0495f70f6c17de25e
-# deploy tag --project main
+# sam tag --project main
 latest -> c04e858b003cefb5642903f0495f70f6c17de25e
 ```
 
@@ -276,11 +276,11 @@ To avoid having to specify the project for each command, you can specify the
 default project to use.
 
 ```
-# deploy project
+# sam project
 * default
   main
-# deploy project --use main
-# deploy project
+# sam project --use main
+# sam project
   default
 * main
 ```
@@ -299,7 +299,7 @@ To push remotely, use `scp` or `rsync` instead.
 # rsync .deploy example.com:/var/www/assets
 ```
 
-Alternatively, `deploy` provides a `push` command which can simplify deployment
+Alternatively, `sam` provides a `push` command which can simplify deployment
 to remote servers or services. First a *remote* must be defined. At this time,
 *remote*s must be defined manually.
 
@@ -309,7 +309,7 @@ To create a *remote* for OVH object storage, we would create a new file under
 ```
 env /home/user/.config/sam/deploy.env
 dest common/ver
-exec swift --os-auth-url {OS_AUTH_URL} --auth-version 3 --os-tenant-name {OS_TENANT_NAME} --os-project-name {OS_TENANT_NAME} --os-username {OS_USERNAME} upload --header 'Content-Type: {DEPLOY_MIME}' --object-name {DEPLOY_DEST} Static {DEPLOY_SRC}
+push swift --os-auth-url {OS_AUTH_URL} --auth-version 3 --os-tenant-name {OS_TENANT_NAME} --os-project-name {OS_TENANT_NAME} --os-username {OS_USERNAME} upload --header 'Content-Type: {DEPLOY_MIME}' --object-name {DEPLOY_DEST} Static {DEPLOY_SRC}
 ```
 
 The first line defines a file to read environment variables from. The second line of the *remote* file defines a destination folder. The third line, defines the command to execute for each file that needs to be deployed. The curly braces are used to reference environment variables.
@@ -330,7 +330,7 @@ Each line defined a name and value pair, separated by a space.
 One defined, you can use the `push` command to deploy your assets automatically.
 
 ```
-# deploy push ovh
+# sam push ovh
 info: pushing objects/d7/d76009f3e8533dcee64ea80fd671ba665b4cfb82
 info: pushing objects/c8/c8f9738701a05e1ed83aac8e958798c2524eee2d
 info: pushing objects/96/969efc7579f3b515a419c739d701d3fdb766336d
@@ -344,16 +344,34 @@ has been deployed first. Without this consideration, a tag would reference a
 commit that doesn't exist, or assets that are still in the process of being
 deployed.
 
-By default, deploy will only push the changes since the last commit. It's
+By default, `sam` will only push the changes since the last commit. It's
 possible to push all the objects using the `--full` option. The `--diff` option
 specifies what tag/commit to base the changes from. The `--ref` option specifies
 what tag/commit to push.
 
 ```
-# deploy push --full ovh
+# sam push --full ovh
 ...
-# deploy push --ref v2.1 --diff v2.0 ovh
+# sam push --ref v2.1 --diff v2.0 ovh
 ...
+```
+
+### Importing versioned assets
+
+In some cases, you may need to import versioned assets into a repository. The
+`pull` command accepts a tag to resolve with the specified *remote*. Once the
+tag is resolved to a commit, `pull` will copy the associated objects from the
+remote into the local repository, skipping objects that already exist. In
+order to work with these objects, they must be incorporated into the working
+tree of files. This is accomplished using the `checkout` command.
+
+```
+# ls
+main.css
+# sam pull ovh latest
+# sam checkout latest
+# ls
+main.css foo.css bar.css
 ```
 
 ### How to reference a versioned asset
@@ -407,7 +425,7 @@ repository consumes on disk. deploy includes a garbage collection command called
 `gc` which automatically prunes orphaned objects.
 
 ```
-# deploy gc
+# sam gc
 info: pruning object d25f87bf6a63b42b65bcaf1d7b444dead64e07e0
 info: pruning object d43bd43d21df66c9b678eec9dee3b113212a29b4
 info: pruning object de06f5317fa199730c7c0dbc8e0586443c1a9cd0
@@ -419,7 +437,7 @@ number of orphaned objects over time. This same command can be run on the remote
 repository as well.
 
 ```
-web-server# SAM_TREE_DIR= SAM_REPO_DIR=/var/www/assets deploy gc
+web-server# SAM_TREE_DIR= SAM_REPO_DIR=/var/www/assets sam gc
 info: pruning object bd62ccf770ad138a4c29ca9e6e82c594075f707a
 info: pruning object f1810e6f1cbefbe510c377807818c968533028d8
 info: pruning object 174041ba1866b80aadc546a6a76116dbfc28aaea
@@ -433,7 +451,7 @@ info: pruning object e226dd4cc024b903277dd31e8019375a60faa40a
 info: pruned 10 objects, 2750734 bytes reclaimed
 ```
 
-deploy expects to be run in a working tree. In the above example, the environment
+`sam` expects to be run in a working tree. In the above example, the environment
 variables `SAM_TREE_DIR` and `SAM_REPO_DIR` are set so deploy doesn't attempt to
 traverse the filesystem looking for a repository stored in `.deploy`. This allows
 deploy to run on "bare" repository that has no working tree.
@@ -443,5 +461,5 @@ a command like `rclone` first.
 
 ```
 # rclone mount ovh:container /mnt
-# SAM_TREE_DIR= SAM_REPO_DIR=/mnt/assets
+# SAM_TREE_DIR= SAM_REPO_DIR=/mnt/assets sam gc
 ```

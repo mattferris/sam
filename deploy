@@ -142,10 +142,11 @@ function lsdir(string $dir, bool $hidden = false): ?array {
 
 // delete a directory
 function rrmdir(string $dir): bool {
-    foreach (lsdir($dir, true) as $e)
+    foreach (lsdir($dir, true) as $e) {
         $ep = path($dir, $e);
         if (is_dir($ep) && !rrmdir($ep)) return false;
         elseif (!is_dir($ep) && !unlink($ep)) return false;
+    }
     return true;
 }
 
@@ -345,6 +346,41 @@ function rmtget(string $repo, string $name): ?array {
         $remote[$key] = $val;
     }
     return $remote;
+}
+
+
+// get an executable command string for remote operation
+function rmtcmd(string $command, array $remote, string $src, string $dest, string $mime = 'text/plain'): string {
+    $tokens = array_merge($remote['env'], [
+        'DEPLOY_MIME' => $mime,
+        'DEPLOY_DEST' => $dest,
+        'DEPLOY_SRC' => $src
+    ]);
+    $search = array_map(function ($v) { return '{'.$v.'}'; }, array_keys($tokens));
+    return str_replace($search, array_values($tokens), $remote[$command]);
+}
+
+
+// get mime type of file
+function mimeget(string $file, string $default = 'text/plain'): string {
+    $parts = explode('.', $file);
+    $ext = array_pop($parts);
+    $mime = $default;
+    switch ($ext) {
+        case 'css': $mime = 'text/css'; break;
+        case 'js': $mime = 'text/javascript'; break;
+        case 'txt': $mime = 'text/plain'; break;
+        case 'html': $mime = 'text/html'; break;
+        case 'png': $mime = 'image/png'; break;
+        case 'gif': $mime = 'image/gif'; break;
+        case 'jpg': $mime = 'image/jpeg'; break;
+        case 'otf': $mime = 'font/otf'; break;
+        case 'svg': $mime = 'image/svg+xml'; break;
+        case 'ttf': $mime = 'font/ttf'; break;
+        case 'woff': $mime = 'font/woff'; break;
+        case 'woff2': $mime = 'font/woff2'; break;
+    }
+    return $mime;
 }
 
 
@@ -614,6 +650,7 @@ function cmd_status(string $cwd, string $tree, string $repo, array $args, string
     while (list($file, $id) = shiftk($index)) {
         if (!isset($current[$file])) $listing[$file] = '+';
         elseif ($current[$file] !== $id) $listing[$file] = '*';
+        elseif (!file_exists(path($tree, $file)) || sha1_file(path($tree, $file)) !== $id) $listing[$file] = '!';
         else $listing[$file] = ' ';
         if (isset($current[$file])) unset($current[$file]);
     }
@@ -811,27 +848,10 @@ function cmd_push(string $cwd, string $tree, string $repo, array $args, string $
     }
 
     foreach ($commit as $file => $objid) {
-        $parts = explode('.', $file);
-        $ext = array_pop($parts);
-        $mime = 'text/plain';
-        switch ($ext) {
-            case 'css': $mime = 'text/css'; break;
-            case 'js': $mime = 'text/javascript'; break;
-            case 'txt': $mime = 'text/plain'; break;
-            case 'html': $mime = 'text/html'; break;
-            case 'png': $mime = 'image/png'; break;
-            case 'gif': $mime = 'image/gif'; break;
-            case 'jpg': $mime = 'image/jpeg'; break;
-            case 'otf': $mime = 'font/otf'; break;
-            case 'svg': $mime = 'image/svg+xml'; break;
-            case 'ttf': $mime = 'font/ttf'; break;
-            case 'woff': $mime = 'font/woff'; break;
-            case 'woff2': $mime = 'font/woff2'; break;
-        }
-        $files[objfpath($repo, $objid)] = $mime;
+        $files[objfpath($repo, $objid)] = mimeget($file);
     }
 
-    isset($remote['exec']) || err(4, 'undefined exec for remote');
+    isset($remote['push']) || err(4, 'undefined push command for remote');
 
     if (isset($remote['env'])) {
         file_exists($remote['env']) ||
@@ -848,17 +868,8 @@ function cmd_push(string $cwd, string $tree, string $repo, array $args, string $
 
     foreach ($files as $path => $mime) {
         $relpath = relpath($repo, $path);
-
-        $tokens = array_merge($remote['env'], [
-            'DEPLOY_MIME' => $mime,
-            'DEPLOY_DEST' => path($remote['dest'], $relpath),
-            'DEPLOY_SRC' => $path
-        ]);
- 
-        $search = array_map(function ($v) { return '{'.$v.'}'; }, array_keys($tokens));
-        $cmd = str_replace($search, array_values($tokens), $remote['exec']);
         info('pushing {f}', ['f' => $relpath]);
-
+        $cmd = rmtcmd('push', $remote, $path, path($remote['dest'], $relpath), $mime);
         $res = pexec($cmd, getcwd(), $remote['env']);
 
         if ($res['rc'] !== 0)
@@ -867,6 +878,119 @@ function cmd_push(string $cwd, string $tree, string $repo, array $args, string $
                 'm' => str_replace("\n", '_', $res['err']),
                 'c' => $res['rc']
             ]);
+    }
+
+    return 0;
+}
+
+
+// pull commit and related objects into the local repository
+function cmd_pull(string $cwd, string $tree, string $repo, array $args, string $curproj): int {
+    $usage = 'pull [ --help | --project <project> ] [ --remote <remote> ] <tag>';
+
+    list($opts, $args) = opts($args, 'help? project?: remote?:',
+        function () use ($usage) { return usage($usage); });
+
+    if (isset($opts['help'])) usage($usage);
+
+    $project = isset($opts['project']) ? $opts['project'][0] : $curproj;
+    $projpath = projpath($repo, $project);
+
+    projex($repo, $project) ||
+        eprojnotfound($project);
+    $remote = rmtget($repo, $opts['remote'][0]);
+    $tag = array_shift($args);
+
+    if (is_null($remote))
+        err(3, 'remote not found: {r}', ['r' => $remote]);
+
+    if (tagex($projpath, $tag))
+        err(4, 'unable to pull: tag "{t}" already exists', ['t' => $tag]);
+
+    if (isset($remote['env'])) {
+        file_exists($remote['env']) ||
+            err(3, 'env file not found: {f}', ['f'=>$remote['env']]);
+        $remote['env'] = penvfile($remote['env']);
+    } else {
+        $remote['env'] = [];
+    }
+
+    info('pulling tag');
+    $tagpath = tagpath($projpath, $tag);
+    $reltagpath = relpath($repo, $tagpath);
+    if (!is_dir(dirname($tagpath))) mkdir(dirname($tagpath), 0750, true);
+    $cmd = rmtcmd('pull', $remote, path($remote['dest'], $reltagpath), $tagpath);
+    $res = pexec($cmd, getcwd(), $remote['env']);
+    if ($res['rc'] !== 0)
+        err(4, 'failed to pull tag from remote: {t}: {m} ({c})', [
+                't' => $reltagpath,
+                'm' => str_replace("\n", '_', trim($res['err'])),
+                'c' => $res['rc']
+            ]);
+
+    $commitId = tagget($projpath, $tag);
+
+    if (objex($repo, $commitId))
+        err(4, 'unable to pull: commit {id} already exists', ['id' => $commitId]);
+
+    info('pulling commit {c}', ['c' => $commitId]);
+    $objpath = objfpath($repo, $commitId);
+    $relobjpath = relpath($repo, $objpath);
+    if (!is_dir(dirname($objpath))) mkdir(dirname($objpath), 0750, true);
+    $cmd = rmtcmd('pull', $remote, path($remote['dest'], $relobjpath), $objpath);
+    $res = pexec($cmd, getcwd(), $remote['env']);
+    if ($res['rc'] !== 0)
+        err(4, 'failed to pull commit object from remote: {o}: {m} ({c})', [
+                'o' => $relobjpath,
+                'm' => str_replace("\n", '_', trim($res['err'])),
+                'c' => $res['rc']
+            ]);
+
+    $commit = comget(objget($repo, $commitId));
+
+    foreach ($commit as $file => $objid) {
+        if (objex($repo, $objid)) continue;
+        info('pulling {o}', ['o' => $objid]);
+        $objpath = objfpath($repo, $objid);
+        $relobjpath = relpath($repo, $objpath);
+        if (!is_dir(dirname($objpath))) mkdir(dirname($objpath), 0750, true);
+        $cmd = rmtcmd('pull', $remote, path($remote['dest'], $relobjpath), $objpath);
+        $res = pexec($cmd, getcwd(), $remote['env']);
+        if ($res['rc'] !== 0)
+            err(4, 'failed to pull object from remote: {o}: {m} ({c})', [
+                    'o' => $relobjpath,
+                    'm' => str_replace("\n", '_', trim($res['err'])),
+                    'c' => $res['rc']
+            	]);
+    }
+
+    return 0;
+}
+
+
+function cmd_checkout(string $cwd, string $tree, string $repo, array $args, string $curproj): int {
+    $usage = 'checkout [ --help | --project <project> ] <tag|commit>';
+
+    list($opts, $args) = opts($args, 'help? project?:',
+        function () use ($usage) { return usage($usage); });
+
+    if (isset($opts['help']) || count($args) < 1) usage($usage);
+
+    $project = isset($opts['project']) ? $opts['project'][0] : $curproj;
+    $projpath = projpath($repo, $project);
+
+    projex($repo, $project) ||
+        eprojnotfound($project);
+
+    $ref = array_shift($args);
+
+    if (tagex($projpath, $ref))
+        $ref = tagget($projpath, $ref);
+
+    $commit = comget(objget($repo, $ref));
+    foreach ($commit as $file => $objid) {
+        if (!is_dir(dirname($file))) mkdir(dirname($file), 0755, true);
+        copy(objfpath($repo, $objid), path($tree, $file));
     }
 
     return 0;
@@ -957,6 +1081,8 @@ function main() {
         case 'project':
         case 'tag':
         case 'push':
+        case 'pull':
+        case 'checkout':
         case 'gc':
             break;
         default:
@@ -999,7 +1125,15 @@ usage: {$me} { init | add | status | commit | project | tag | gc }
 
     push [ --project <project> ] [ --ref <tag|commit> ] [ --full | --diff <tag|commit> ] <remote>
 
-        Copy associated files to the remote.
+        Copy associated files to the remote
+
+    pull [ --project <project> ] <remote> <tag|commit>
+
+        Copy associated files from the remote
+
+    checkout [ --project <project> ] <tag|commit>
+
+        Synchronize the working tree against the specified commit.
 
     gc
 
