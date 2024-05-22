@@ -1,0 +1,709 @@
+#!/usr/bin/php
+<?php
+
+/**
+ * Smart Asset Manager
+ *
+ * Manage local and remote CSS assets.
+ */
+
+
+/**
+ * Print usage information, then exit.
+ */
+function usage() {
+    global $argv;
+    echo <<<EOF
+usage: {$argv[0]} [options] <pack1> [ <packn> ]
+
+SAM (Smart Asset Manager) helps assemble your web assets into packages. It
+expects one or more pack files to be specified.
+
+Options:
+
+    --help
+        Display this message.
+
+    --log-level [level]
+        Set the logging threshold. 0 turns logging off, 5+ provides debugging
+        information. Default is 4.
+
+    --quiet
+        Don't display any output.
+
+EOF;
+    exit(1);
+}
+
+
+/**
+ * Print a message.
+ *
+ * Levels: 1:error, 2:warn, 3:notice, 4:info, 5+:debug
+ *
+ * @param int $level The log level for the message
+ * @param string $tpl The template string
+ * @param array $vars Variables to use for substitition
+ */
+function _log(int $level, string $tpl, array $vars = []) {
+    global $options;
+    if ($level > $options['log-level']) return;
+    foreach ($vars as $k => $v) {
+        $tpl = str_replace('{'.$k.'}', $v, $tpl);
+    }
+    echo $tpl."\n";
+}
+
+
+/**
+ * Print error message.
+ *
+ * @param string $tpl The template string
+ * @param array $vars Variables to use for substitution
+ */
+function error(string $tpl, array $vars = []) {
+    _log(1, "error: $tpl", $vars);
+}
+
+
+/**
+ * Print warning message.
+ *
+ * @param string $tpl The template string
+ * @param array $vars Variables to use for substitution
+ */
+function warn(string $tpl, array $vars = []) {
+    _log(2, "warning: $tpl", $vars);
+}
+
+
+/**
+ * Print notice message.
+ *
+ * @param string $tpl The template string
+ * @param array $vars Variables to use for substitution
+ */
+function notice(string $tpl, array $vars = []) {
+    _log(3, "notice: $tpl", $vars);
+}
+
+
+/**
+ * Print info message.
+ *
+ * @param string $tpl The template string
+ * @param array $vars Variables to use for substitution
+ */
+function info(string $tpl, array $vars = []) {
+    _log(4, "info: $tpl", $vars);
+}
+
+
+/**
+ * Print debug message
+ *
+ * @param string $level The debug level
+ * @param string $tpl The template string
+ * @param array $vars Variables to use for substitution
+ */
+function debug(int $level, string $tpl, array $vars = []) {
+    // debug levels start at 1, so we need to add 4 to start at log level 5
+    $level += 4;
+    _log($level, "debug: $tpl", $vars);
+}
+
+
+/**
+ * Execute a command using proc_open/proc_close
+ *
+ * @param string $cmd The command to execute
+ * @param string $path The path to execute the command in
+ * @param array $env The environment variables to set for the command
+ * @return array An array containing the exit code, and output from stdout/stderr
+ */
+function pexec(string $cmd, string $path, array $env = []) {
+    $desc = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w']
+    ];
+
+    debug(2, "running {cmd} in {path}", [ 'cmd' => $cmd, 'path' => $path ]);
+
+    $proc = proc_open($cmd, $desc, $pipes, $path, $env);
+
+    if ($proc === false) {
+        debug(1, 'failed to execute command: {cmd}', [ 'cmd' => $cmd ]);
+        return;
+    }
+
+    $out = stream_get_contents($pipes[1]);
+    $err = stream_get_contents($pipes[2]);
+
+    return [
+        'rc' => proc_close($proc),
+        'out' => $out,
+        'err' => $err
+    ];
+}
+
+
+/**
+ * Define a symbol
+ *
+ * @param string $vardef Symbol definition
+ * @param array $symbols The symbols array
+ */
+function def_symbol(string $vardef, &$symbols) {
+    $sep = strpos($vardef, ' ');
+    $sym = substr($vardef, 0, $sep);
+    $val = substr($vardef, $sep + 1);
+    $symbols[$sym] = $val;
+}
+
+
+/**
+ * Set option
+ *
+ * @param string $optdef Option definition
+ * @param array $options The options array
+ */
+function set_opt(string $optdef, &$options) {
+    $sep = strpos($optdef, ' ');
+    $opt = substr($optdef, 0, $sep);
+    $val = substr($optdef, $sep + 1);
+    $options[$opt] = $val;
+}
+
+
+/**
+ * Replace the variables in a string with their values
+ *
+ * @param string $str The string to replace values in
+ * @param array $vars An array of defined variables
+ * @return string The string with substituted values
+ */
+function substitute(string $str, array $vars): string {
+    foreach ($vars as $k => $v) {
+        $str = str_replace('{'.$k.'}', $v, $str);
+    }
+    return $str;
+}
+
+
+/**
+ * Sanitize URL/path name for use as directory name
+ *
+ * @param string $res The URL/path to sanitize
+ * @return string The sanitized URL/path
+ */
+function sanitize(string $res): string {
+    $res = preg_replace('#^https://((.*:|).+@|)#', '', $res);
+    $res = preg_replace('#/#', '_', $res);
+    return $res;
+}
+
+
+/**
+ * Fetch a remote or local GIT repository
+ *
+ * @param string $asset The asset definition
+ * @return array One or more paths to the cached git repo
+ */
+function fetch_git(string $asset) {
+    if (empty($asset)) {
+        error('empty asset definition');
+        return;
+    }
+
+    $parts = preg_split('/\s+/', $asset);
+
+    if (!isset($parts[1])) {
+        error('missing commit reference');
+        return;
+    }
+
+    if (!isset($parts[2])) {
+        error('missing asset path');
+        return;
+    }
+
+    $src = array_shift($parts);
+    $ref = array_shift($parts);
+
+    if (!file_exists('remote')) {
+        mkdir('remote');
+    }
+
+    $dst = 'remote/'.sanitize($src);
+    $fetch = true;
+
+    /*
+     * If the repo already exists locally, check that it contains the commit,
+     * and if it doesn't, then delete and prepare to fetch it again.
+     */
+    if (file_exists($dst)) {
+        $res = pexec("/usr/bin/git rev-parse $ref", $dst);
+        if ($res['rc'] !== 0) {
+            pexec("/bin/rm -r $dst", $cwd);
+        } else {
+            $fetch = false;
+        }
+    }
+
+    if ($fetch) {
+        $res = pexec("/usr/bin/git clone $src $dst", getcwd()); 
+        if ($res['rc'] !== 0) {
+            error("failed to clone {src} to {dst}: {err} ({rc})", [
+                'src' => $src,
+                'dst' => $dst,
+                'err' => str_replace("\n", '_', $res['err']),
+                'rc' => $res['rc']
+            ]);
+            return;
+        }
+    }
+
+    $res = pexec("/usr/bin/git checkout $ref", $dst);
+    if ($res['rc'] !== 0) {
+        error("failed to checkout {ref}: {err} ({rc})", [
+            'ref' => $ref,
+            'err' => str_replace("\n", '_', $res['err']),
+            'rc' => $res['rc']
+        ]);
+        return;
+    }
+
+    $ret = [];
+    foreach ($parts as $path) {
+        $ret[] = "$dst/$path";
+    }
+
+    return $ret;
+}
+
+
+/**
+ * Fetch a remote asset over HTTPS
+ *
+ * @param string $asset The asset definition
+ */
+function fetch_https(string $asset) {
+    $parts = explode(' ', $asset);
+
+    if (!isset($parts[1])) {
+        error('missing checksum');
+        return;
+    }
+
+    list($url, $checksum) = $parts;
+
+    if (!file_exists('remote')) {
+        mkdir('remote');
+    }
+
+    $dst = 'remote/'.sanitize($url);
+    $fetch = true;
+
+    if (file_exists($dst) && strpos(sha1($dst), $checksum) === 0) {
+        $fetch = false;
+    }
+
+    if ($fetch) {
+        $rh = @fopen($url, 'r');
+        if (!$rh) {
+            error('failed to read from {url}', [ 'url' => $url ]);
+            return;
+        }
+
+        $lh = @fopen($dst, 'w');
+        if (!$lh) {
+            error('failed to open {file}', [ 'file' => $dst ]);
+            return;
+        }
+
+        flock($lh, LOCK_EX);
+        while (!feof($rh)) {
+            fwrite($lh, fread($rh, 4096 * 16));
+        }
+        flock($lh, LOCK_UN);
+        fclose($lh);
+        fclose($rh);
+
+        $sum = sha1_file($dst);
+        if (strpos($sum, $checksum) !== 0) {
+            error('checksum mismatch: expected {exp}, got {got}', [
+                'exp' => $checksum,
+                'got' => $sum
+            ]);
+            return false;
+        }
+    }
+
+    return [ $dst ];
+}
+
+
+/**
+ * Fetch an asset local to the project
+ *
+ * @param string $asset The asset definition
+ */
+function fetch_local(string $asset) {
+    if (!file_exists($asset)) {
+        error('asset not found: {asset}', [ 'asset' => $asset ]);
+        return;
+    }
+
+    return [ $asset ];
+}
+
+
+/**
+ * Run post-processors on a file
+ *
+ * @param string $path The path to the asset file
+ * @param resource $out A file handle to to output file
+ * @param array $processors The post processors to run
+ */
+function post_process(string $path, $out, array $processors) {
+    if (!is_resource($out)) {
+        error('output file handle is not a resource');
+        exit(1);
+    }
+
+    $parts = explode('.', $path);
+    $ext = array_pop($parts);
+
+    $extProcessors = [];
+    if (isset($processors[$ext])) {
+        $extProcessors = $processors[$ext];
+    } elseif (isset($processors['*'])) {
+        $extProcessors = $processors['*'];
+    } else {
+        debug(1, 'no post processors defined for extension {ext}', [ 'ext' => $ext ]);
+    }
+
+    $buf = file_get_contents($path);
+    $tmp = sys_get_temp_dir();
+
+    debug(1, 'processing {file}', [ 'file' => $path ]);
+    foreach ($extProcessors as $pp) {
+        $stdout = mktemp();
+        $stderr = mktemp();
+
+        debug(2, 'running post-processor: {pp}', [ 'pp' => $pp ]);
+
+        $desc = [
+            0 => ['pipe', 'r'],
+            1 => ['file', $stdout, 'w'],
+            2 => ['file', $stderr, 'w']
+        ];
+
+        $proc = proc_open($pp, $desc, $pipes);
+
+        if ($proc === false) {
+            debug(1, 'failed to execute command: {cmd}', [ 'cmd' => $cmd ]);
+            exit(1);
+        }
+
+        fwrite($pipes[0], $buf);
+
+        $code = proc_close($proc);
+
+        $buf = file_get_contents($stdout);
+
+        if ($code !== 0) {
+            error('post processor failed ({cmd}), returned code {code}', [ 'code' => $code, 'cmd' => $pp ]);
+            echo file_get_contents($stderr);
+            exit(2);
+        }
+
+        unlink($stdout);
+        unlink($stderr);
+    }
+
+    fwrite($out, $buf);
+}
+
+
+/**
+ * Define a post-processor
+ *
+ * @param string $args The argument string
+ * @param array $processors The array of existing post processors
+ */
+function set_postProcessor(string $args, array &$processors) {
+    $sep = strpos($args, ' ');
+    $exts = explode(',', substr($args, 0, $sep));
+    $cmd = substr($args, $sep + 1);
+    foreach ($exts as $ext) {
+        if (!isset($processors[$ext])) {
+           $processors[$ext] = [];
+        }
+        $processors[$ext][] = $cmd;
+    }
+}
+
+
+/**
+ * Generate a temporary file name
+ */
+function mktemp() {
+    return tempnam(sys_get_temp_dir(), rand(1000, 9999));
+}
+
+
+/**
+ * Return a new scope
+ */
+function new_scope(): array {
+    return [
+        'defaults' => [
+            'suffix' => '.out',
+            'target' => '{pack}{suffix}',
+            'mode' => '0644',
+            'owner' => null,
+            'group' => null
+        ],
+        'postProcessors' => [],
+        'assetPaths' => [],
+    ];
+}
+
+
+/**
+ * Parse the lines within a pack file, return the list of parsed asset paths
+ *
+ * @param string $pack The path to the pack file
+ * @param array $options The existing options array
+ * @param array $symbols The existing symbols array
+ * @param array $postProcessors The exist postProcessors array
+ * @return array The parsed asset paths
+ */
+function parsePack(string $pack, array &$options, array &$symbols, &$postProcessors): array {
+    $assets = explode("\n", file_get_contents($pack));
+    $assetPaths = [];
+
+    $oldcwd = getcwd();
+    $newcwd = dirname($pack);
+    chdir($newcwd);
+
+    $lc = count($assets);
+    for ($l=0; $l<$lc; $l++) {
+        $asset = $assets[$l];
+
+        if (preg_match('/(^#|^$|^\s+$)/', $asset)) {
+            debug(3, '{file}:{line} empty line or comment', [
+                'file' => $pack,
+                'line' => $l
+            ]);
+            continue;
+        }
+
+        while (substr($assets[$l+1], 0, 1) === ' ') {
+            debug(3, 'escape line break, asset continues on next line');
+            $next = $assets[++$l];
+            $asset .= ' '.preg_replace('/^\s+/', '', $next);
+        }
+
+        $paths = [];
+        $subfn = function ($str) use ($options, $symbols) {
+            return substitute($str, array_merge($options, $symbols));
+        };
+        $cmd = substr($asset, 0, strpos($asset, ' '));
+
+        switch($cmd) {
+
+            case 'set':
+                set_opt($subfn(substr($asset, 4)), $options);
+                continue 2;
+
+            case 'def':
+                def_symbol($subfn(substr($asset, 4)), $symbols);
+                continue 2;
+
+            case 'git':
+                $paths = fetch_git($subfn(substr($asset, 4)));
+                break;
+
+            case 'post':
+                set_postProcessor($subfn(substr($asset, 5)), $postProcessors);
+                continue 2;
+
+            case 'import':
+                $importPack = $subfn(substr($asset, 7));
+                $parsedPaths = parsePack($importPack, $options, $symbols, $postProcessors);
+                $parentDir = dirname($importPack);
+                $paths = [];
+                foreach ($parsedPaths as $path) {
+                    $fc = substr($path, 0, 1);
+                    if ($fc !== '/') {
+                        $path = $parentDir.DIRECTORY_SEPARATOR.$path;
+                    }
+                    $paths[] = $path;
+                }
+                break;
+
+            default:
+                $asset = $subfn($asset);
+                if (substr($asset, 0, 8) === 'https://') {
+                    $paths = fetch_https($asset);
+                } else {
+                    $paths = fetch_local($asset);
+                }
+
+        }
+
+        if (count($paths) === 0) {
+            error('{file}:{line} returned empty path', [
+                'file' => $pack,
+                'line' => $l,
+            ]);
+            exit(1);
+        }
+
+        foreach ($paths as $path) {
+            if (!isset($assetPaths[$path])) {
+                $assetPaths[$path] = true;
+            } else {
+                debug(2, 'skipping duplicate asset {file}', [ 'file' => $path ]);
+            }
+        }
+    }
+
+    chdir($oldcwd);
+
+    return array_keys($assetPaths);
+}
+
+
+function parse(string $pack) {
+    $scope = new_scope();
+    extract($scope);
+
+    if (!file_exists($pack)) {
+        error("pack file doesn't exist: {pack}", ['pack' => $pack]);
+        exit(1);
+    }
+
+    $cwd = dirname($pack);
+    $pack = basename($pack);
+    chdir($cwd);
+
+    $options = array_merge($defaults, []);
+    $options['pack'] = $pack;
+
+    $symbols = [];
+
+    $outtmp = mktemp();
+    $of = @fopen($outtmp, 'w');
+    flock($of, LOCK_EX);
+
+    $paths = parsePack($pack, $options, $symbols, $postProcessors);
+
+    foreach ($paths as $path) {
+        info('asset {path}', [ 'path' => $path ]);
+        $if = @fopen($path, 'r');
+        flock($if, LOCK_SH);
+        while (!feof($if)) fwrite($of, fread($if, 4096));
+        flock($if, LOCK_UN);
+        fclose($if);
+    }
+
+    flock($of, LOCK_UN);
+    fclose($of);
+
+    $posttmp = "{$outtmp}.cmp";
+    $pf = @fopen($posttmp, 'w');
+    flock($pf, LOCK_EX);
+
+    post_process($outtmp, $pf, $postProcessors);
+
+    flock($pf, LOCK_UN);
+    fclose($pf);
+
+    unlink($outtmp);
+
+    $target = $options['target'];
+    foreach (array_merge($options, $symbols) as $k => $v) {
+        $target = str_replace('{'.$k.'}', $v,  $target);
+    }
+
+    debug(1, 'changing {path} to mode {mode}', [
+        'path' => $posttmp,
+        'mode' => $options['mode']
+    ]);
+    if (@chmod($posttmp, intval($options['mode'], 8)) === false) {
+        error('failed to set file mode for {path}', [ 'path' => $posttmp ]);
+        exit(1);
+    }
+
+    if (!is_null($options['owner'])) {
+        debug(1, 'changing {path} to owner {owner}', [
+            'path' => $posttmp,
+            'owner' => $options['owner'],
+        ]);
+        if (@chown($posttmp, $options['owner']) === false) {
+            error('failed to set owner for {path}', [ 'path' => $posttmp ]);
+            exit(1);
+        }
+    }
+
+    if (!is_null($options['group'])) {
+        debug(1, 'changing {path} to group {group}', [
+            'path' => $posttmp,
+            'group' => $options['group']
+        ]);
+        if (@chgrp($posttmp, $options['group']) === false) {
+            error('failed to set group for {path}', [ 'path' => $posttmp ]);
+            exit(1);
+        }
+    }
+
+    rename($posttmp, $target);
+}
+
+
+$options = [
+    'log-level' => 4
+];
+
+$files = [];
+
+if (count($argv) === 0) {
+    usage();
+}
+
+$ac = count($argv);
+for ($i=1; $i<$ac; $i++) {
+
+    if (strpos($argv[$i], '--') === 0) {
+        $opt = substr($argv[$i], 2);
+        switch ($opt) {
+
+            case 'log-level':
+                $options[$opt] = $argv[++$i];
+                continue 2;
+
+            case 'quiet':
+                $options['log-level'] = 0;
+                continue 2;
+
+            case '--help':
+                usage();
+
+            default:
+                error('unknown option: {opt}', [ 'opt' => $opt ]);
+                exit(1);
+
+        }
+    }
+
+    $files[] = $argv[$i];
+
+}
+
+foreach ($files as $file) {
+    parse($file);
+}

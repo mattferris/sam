@@ -379,6 +379,7 @@ function mimeget(string $file, string $default = 'text/plain'): string {
         case 'ttf': $mime = 'font/ttf'; break;
         case 'woff': $mime = 'font/woff'; break;
         case 'woff2': $mime = 'font/woff2'; break;
+        case 'pdf': $mime = 'application/pdf'; break;
     }
     return $mime;
 }
@@ -1115,9 +1116,9 @@ usage: {$me} { init | add | status | commit | project | tag | gc }
         Commit the staged files for the specified project, and apply the
         specified tags
 
-    project [ --delete <project> | --add <project> ]
+    project [ --delete <project> | --add <project> | --use <project> ]
 
-        List projects, create a new project, or delete a project
+        List projects, create a new project, delete a project, or set the default project
 
     tag [ --project <project> ] [ <tag> <commit> | --delete <tag> ]
 
