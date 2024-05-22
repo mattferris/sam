@@ -96,7 +96,7 @@ Referencing a remote asset using HTTPS is pretty simple.
 https://www.example.com/assets/css/remote.css
 ```
 
-If there was more then once asset on the remote host, you could use variables to
+If there was more then one asset on the remote host, you could use variables to
 make your life easier.
 
 ```
@@ -121,7 +121,7 @@ Git assets
 
 Files can also be included using git. This works for local and remote
 repositories. In both cases, the referenced repository is cloned into the local
-cached, and the appropriate commit is checked out before accessing the asset. To
+cached and the appropriate commit is checked out before accessing the asset. To
 use git assets, use the `git` command.
 
 ```
@@ -132,7 +132,7 @@ git /home/user/assets.git master css/remote.css css/more.css
 git git@github.com:user/assets master css/remote.css css/more.css
 ```
 
-The git command expects the location of the repository and the commit to use,
+The `git` command expects the location of the repository and the commit to use,
 followed by one or more assets. It's also possible to specify the assets on
 subsequent (indented) lines.
 
@@ -155,7 +155,7 @@ Git assets are the most robust mechanism for referencing remote assets.
 Referencing assets by a specific commit (rather then branch name) ensures you'll
 always receive the same asset content. Referencing by commit ID also means the
 remote repository can continue to be updated without affecting the assets.
-Contrast this with HTTPS assets, where a newly published version of the remote
+Contrast this with HTTPS assets where a newly published version of the remote
 asset will break the building of the pack if the asset isn't cached.
 
 Importing assets from another pack
@@ -233,7 +233,7 @@ These features allow you to create a file structure that is able to be
 referenced by a *tag*. The *tag* will resolve to a file list, from which the
 ultimate asset URL will be resolveable.
 
-`sam` tracks versions in a similar manner to git. All versioned assets are
+Sam tracks versions in a similar manner to git. All versioned assets are
 stored in a *repository* stored under `.deploy`. The repository must first be
 initialized, which should be completed from the root folder of your asset
 collections.
@@ -262,7 +262,7 @@ refers to the second last commit (if available).
 
 ```
 # sam add --project main foo.css
-# sam commit main
+# sam commit --project main
 info: committed as c04e858b003cefb5642903f0495f70f6c17de25e
 # sam tag --project main
 latest -> c04e858b003cefb5642903f0495f70f6c17de25e
@@ -292,7 +292,7 @@ a web accessible location.
 # cp -r .deploy /var/www/assets
 ```
 
-To push remotely, use `scp` or `rsync` instead.
+To copy remotely, use `scp` or `rsync` instead.
 
 ```
 # scp -r .deploy example.com:/var/www/assets
@@ -325,9 +325,9 @@ OS_PASSWORD 098u0o2i3jloaisudpf9u
 OS_REGION_NAME BHS
 ```
 
-Each line defined a name and value pair, separated by a space.
+Each line defines a name and value pair, separated by a space.
 
-One defined, you can use the `push` command to deploy your assets automatically.
+Once defined, you can use the `push` command to deploy your assets automatically.
 
 ```
 # sam push ovh
@@ -418,11 +418,11 @@ Ideally, the result would be cached for a certain amount of time.
 
 ### Garbage Collection
 
-Over time, a repository come to hold more and more orphaned objects. These are
-objects that are no longer referenced by any tags, and are therefore no longer
-needed. Periodically pruning these objects will reduce the amount of space the
-repository consumes on disk. deploy includes a garbage collection command called
-`gc` which automatically prunes orphaned objects.
+Over time, a repository will come to hold more and more orphaned objects. These
+are objects that are no longer referenced by any tags, and are therefore no
+longer needed. Periodically pruning these objects will reduce the amount of
+space the repository consumes on disk. Sam includes a garbage collection
+command called `gc` which automatically prunes orphaned objects.
 
 ```
 # sam gc
@@ -452,9 +452,9 @@ info: pruned 10 objects, 2750734 bytes reclaimed
 ```
 
 `sam` expects to be run in a working tree. In the above example, the environment
-variables `SAM_TREE_DIR` and `SAM_REPO_DIR` are set so deploy doesn't attempt to
+variables `SAM_TREE_DIR` and `SAM_REPO_DIR` are set so sam doesn't attempt to
 traverse the filesystem looking for a repository stored in `.deploy`. This allows
-deploy to run on "bare" repository that has no working tree.
+deploy to run in a "bare" repository that has no working tree.
 
 In cases where object storage is used, you may need to mount the container using
 a command like `rclone` first.
